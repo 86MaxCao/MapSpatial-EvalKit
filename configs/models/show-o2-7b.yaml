@@ -1,0 +1,19 @@
+# Show-o2-7B unified multimodal model config for MapSpatial-EvalKit
+name: Show-o2-7B
+backend: veomni_showo2
+model_path: ${CKPT_DIR}/show-o2-7B
+
+load:
+  dtype: bfloat16
+  device: cuda
+
+generate:
+  temperature: 0.0
+  max_new_tokens: 512
+
+backend_args:
+  guidance_scale: 5.0
+  num_steps: 50
+  time_shifting_factor: 3.0
+
+strategies: [direct, external_draw]

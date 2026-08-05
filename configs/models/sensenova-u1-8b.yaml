@@ -1,0 +1,20 @@
+# SenseNova-U1-8B-MoT multimodal model config for MapSpatial-EvalKit
+name: SenseNova-U1-8B-MoT
+backend: veomni_u1
+model_path: ${CKPT_DIR}/SenseNova-U1-8B-MoT
+
+load:
+  dtype: bfloat16
+  device: cuda
+
+generate:
+  temperature: 0.0
+  max_new_tokens: 512
+
+backend_args:
+  cfg_scale: 4.0
+  img_cfg_scale: 1.0
+  num_steps: 30
+  image_size: [256, 256]
+
+strategies: [direct, external_draw]

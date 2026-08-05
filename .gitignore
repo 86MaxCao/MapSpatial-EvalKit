@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Caching
+.pytest_cache/
+.cache/
+*.pyc
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Generated results (images from test runs)
+gen_results/
+
+# Test scripts (diagnostic/temporary)
+diag_*.py
+test_*.py
+
+# Environment
+.env
+.env.local
+
+# Logs
+*.log

@@ -1,0 +1,20 @@
+# JoyAI-Image editing model config for MapSpatial-EvalKit
+name: JoyAI-Image
+backend: veomni_joyai
+model_path: ${CKPT_DIR}/JoyAI-Image-Edit
+
+load:
+  dtype: bfloat16
+  device: cuda
+
+generate:
+  temperature: 0.0
+  max_new_tokens: 512
+
+backend_args:
+  height: 1024
+  width: 1024
+  steps: 50
+  guidance_scale: 7.5
+
+strategies: [direct, external_draw]

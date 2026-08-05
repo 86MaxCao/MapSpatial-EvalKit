@@ -1,0 +1,27 @@
+# ThinkMorph-7B — unified generation+understanding model (Bagel derivative)
+name: ThinkMorph-7B
+backend: veomni_thinkmorph
+model_path: ${CKPT_DIR}/ThinkMorph-7B
+
+load:
+  dtype: bfloat16
+  device: cuda
+
+generate:
+  temperature: 0.3
+  max_new_tokens: 4096
+  max_think_tokens: 4096
+
+backend_args:
+  # ThinkMorph uses slightly different CFG defaults
+  cfg_text_scale: 3.0
+  cfg_img_scale: 1.5
+  num_timesteps: 50
+  timestep_shift: 3.0
+  cfg_interval: [0.4, 1.0]
+  cfg_renorm_type: global
+  cfg_renorm_min: 0.0
+  image_shapes: [1024, 1024]
+  max_rounds: 5
+
+strategies: [direct, native_interleave, external_draw]

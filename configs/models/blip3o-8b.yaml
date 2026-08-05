@@ -1,0 +1,20 @@
+# BLIP3o-8B image generation model config for MapSpatial-EvalKit
+name: BLIP3o-8B
+backend: veomni_blip3o
+model_path: ${CKPT_DIR}/BLIP3o-Model-8B
+
+load:
+  dtype: bfloat16
+  device: cuda
+
+generate:
+  temperature: 0.0
+  max_new_tokens: 512
+
+backend_args:
+  guidance_scale: 7.5
+  dit_guidance_scale: 4.0
+  dit_num_steps: 30
+  unet_num_steps: 50
+
+strategies: [direct, external_draw]

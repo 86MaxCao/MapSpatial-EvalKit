@@ -1,0 +1,24 @@
+# InternVL3_5-8B via vLLM (placeholder style)
+name: InternVL3_5-8B
+backend: vllm
+model_path: ${CKPT_DIR}/InternVL3_5-8B
+
+load:
+  max_model_len: 32768
+  gpu_memory_utilization: 0.7
+  limit_mm_per_prompt:
+    image: 24
+    video: 1
+  dtype: bfloat16
+  trust_remote_code: true
+
+generate:
+  temperature: 0.0
+  max_new_tokens: 2048
+
+batch_size: 32
+
+backend_args:
+  prompt_style: placeholder
+
+strategies: [direct]

@@ -1,0 +1,19 @@
+# GLM-4.6V via transformers (GLM family, url-style content)
+name: GLM-4.6V
+backend: transformers
+model_path: ${CKPT_DIR}/GLM-4.6V
+
+load:
+  model_family: glm
+  model_class: Glm4vForConditionalGeneration
+  dtype: bfloat16
+  trust_remote_code: true
+
+generate:
+  temperature: 0.0
+  max_new_tokens: 4096
+
+backend_args:
+  prompt_style: glm
+
+strategies: [direct]

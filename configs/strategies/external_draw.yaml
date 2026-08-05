@@ -1,0 +1,11 @@
+# External draw strategy config — per question_type draw instructions
+draw_instruction:
+  direction: "Draw an arrow from the green dot to the purple dot to indicate the direction."
+  nearest_point: "Mark lines from the reference point to each candidate point."
+  composite_route_distance: "Trace the two routes being compared on the map."
+  segment_building_count: "Highlight the specified segment and the side with buildings to count."
+  route_validity: "Annotate each candidate route's direction of travel."
+  waypoint_ordering: "Connect the waypoints in order on the map."
+
+draw_followup_text: "Based on the intermediate image above, answer the question."
+max_rounds: 1

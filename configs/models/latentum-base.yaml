@@ -1,0 +1,21 @@
+# LatentUM-Base unified multimodal model config for MapSpatial-EvalKit
+name: LatentUM-Base
+backend: veomni_latentum
+model_path: ${CKPT_DIR}/LatentUM-Base
+
+load:
+  dtype: bfloat16
+  device: cuda
+
+generate:
+  temperature: 0.0
+  max_new_tokens: 512
+
+backend_args:
+  cfg_scale: 3.0
+  temperature: 0.9
+  top_k: 50
+  top_p: 0.95
+  decoder_path: ${CKPT_DIR}/LatentUM-Base/decoder
+
+strategies: [direct, external_draw]

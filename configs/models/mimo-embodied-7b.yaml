@@ -1,0 +1,19 @@
+# MiMo-Embodied-7B via transformers (generic family)
+name: MiMo-Embodied-7B
+backend: transformers
+model_path: ${CKPT_DIR}/MiMo-Embodied-7B
+
+load:
+  model_family: generic
+  model_class: AutoModelForCausalLM
+  dtype: bfloat16
+  trust_remote_code: true
+
+generate:
+  temperature: 0.0
+  max_new_tokens: 4096
+
+backend_args:
+  prompt_style: generic
+
+strategies: [direct]
