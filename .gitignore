@@ -29,7 +29,6 @@ gen_results/
 
 # Test scripts (diagnostic/temporary)
 diag_*.py
-test_*.py
 
 # Environment
 .env

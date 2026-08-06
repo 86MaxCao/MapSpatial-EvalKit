@@ -74,7 +74,7 @@ class U1Backend(Backend):
 
         # Draw params from backend_args
         ba = cfg.backend_args
-        self._image_size = tuple(ba.get("image_size", (256, 256)))
+        self._image_size = tuple(ba.get("image_size", (512, 512)))
         self._cfg_scale = ba.get("cfg_scale", 4.0)
         self._num_steps = ba.get("num_steps", 30)
         self._seed = ba.get("seed", 42)
@@ -211,6 +211,7 @@ class U1Backend(Backend):
                 images=pil_images if pil_images else None,
                 image_size=image_size,
                 cfg_scale=cfg_scale,
+                img_cfg_scale=1.0,
                 num_steps=num_steps,
                 seed=seed,
             )

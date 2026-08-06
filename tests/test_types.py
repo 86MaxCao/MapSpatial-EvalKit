@@ -1,0 +1,63 @@
+"""Test types.py — Prediction, TaskSample, Capabilities serialization."""
+
+import json
+from pathlib import Path
+from mapspatial.types import (
+    Prediction, TraceStep, TaskSample, Capabilities, Message, RunContext,
+)
+
+
+def test_prediction_defaults():
+    p = Prediction(text="hello")
+    assert p.text == "hello"
+    assert p.generated_images == []
+    assert p.trace == []
+    assert p.error is None
+    assert p.meta == {}
+
+
+def test_prediction_with_images_and_trace():
+    p = Prediction(
+        text="answer",
+        generated_images=[Path("/tmp/img_r0.png")],
+        trace=[TraceStep(round=0, kind="image", image=Path("/tmp/img_r0.png"),
+                         triggered_by="forced")],
+        meta={"strategy": "external_draw", "draw_triggered": True},
+    )
+    assert len(p.generated_images) == 1
+    assert p.trace[0].triggered_by == "forced"
+    assert p.meta["strategy"] == "external_draw"
+
+
+def test_capabilities():
+    caps = Capabilities(batch=True, draw=False, native_interleave=False,
+                        max_images=24, video=False)
+    assert caps.batch is True
+    assert caps.max_images == 24
+
+
+def test_task_sample_gold_isolation():
+    """gold must not be in Message — verify isolation."""
+    msg: Message = [
+        {"type": "image", "value": Path("/tmp/test.png")},
+        {"type": "text", "value": "What direction?"},
+    ]
+    sample = TaskSample(id="test_001", message=msg, gold="D")
+    # Check that gold is not in the message
+    for item in sample.message:
+        assert "gold" not in item
+        assert item.get("value") != "D"
+
+
+def test_prediction_serialization():
+    """Prediction should be JSON-serializable for result records."""
+    p = Prediction(
+        text="The answer is B",
+        generated_images=[Path("/tmp/gen_0_r0.png")],
+        trace=[TraceStep(round=0, kind="text", text="thinking...", elapsed_s=1.5)],
+        meta={"strategy": "direct", "rounds": 1, "draw_triggered": False},
+    )
+    # The runner serializes manually, but verify key fields work
+    assert p.text == "The answer is B"
+    assert str(p.generated_images[0]) == "/tmp/gen_0_r0.png"
+    assert p.trace[0].elapsed_s == 1.5

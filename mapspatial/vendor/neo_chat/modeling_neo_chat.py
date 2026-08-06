@@ -80,7 +80,7 @@ except Exception:
 # ---------------------------------------------------------------------------
 
 
-def _sdpa_attn_func(q, k, v, dropout_p=0.0, softmax_scale=None, causal=False, attn_mask=None):
+def _sdpa_attn_func(q, k, v, dropout_p=0.0, softmax_scale=None, causal=False):
     """SDPA fallback for flash_attn_func. Input layout: [B, S, H, D]."""
     q_bhsd = q.transpose(1, 2)
     k_bhsd = k.transpose(1, 2)
@@ -93,31 +93,14 @@ def _sdpa_attn_func(q, k, v, dropout_p=0.0, softmax_scale=None, causal=False, at
         k_bhsd = k_bhsd.repeat_interleave(n_rep, dim=1)
         v_bhsd = v_bhsd.repeat_interleave(n_rep, dim=1)
 
-    if attn_mask is not None:
-        # Use block causal mask (allows bidirectional attention within blocks)
-        if attn_mask.dtype != q_bhsd.dtype:
-            attn_mask = attn_mask.to(q_bhsd.dtype)
-        out = torch.nn.functional.scaled_dot_product_attention(
-            q_bhsd, k_bhsd, v_bhsd, attn_mask=attn_mask, dropout_p=dropout_p,
-            is_causal=False, scale=softmax_scale,
-        )
-    else:
-        out = torch.nn.functional.scaled_dot_product_attention(
-            q_bhsd, k_bhsd, v_bhsd, dropout_p=dropout_p, is_causal=causal, scale=softmax_scale,
-        )
+    out = torch.nn.functional.scaled_dot_product_attention(
+        q_bhsd, k_bhsd, v_bhsd, dropout_p=dropout_p, is_causal=causal, scale=softmax_scale
+    )
     return out.transpose(1, 2).contiguous()
 
 
-def _flash_or_sdpa(q, k, v, dropout_p=0.0, softmax_scale=None, causal=False, attn_mask=None):
+def _flash_or_sdpa(q, k, v, dropout_p=0.0, softmax_scale=None, causal=False):
     """Dispatch between flash-attn and SDPA based on availability."""
-    # When attn_mask is provided (block causal mask), must use SDPA
-    if attn_mask is not None:
-        return _sdpa_attn_func(q, k, v, dropout_p=dropout_p, softmax_scale=softmax_scale, causal=causal, attn_mask=attn_mask)
-    # For GQA, use SDPA with KV head expansion (flash_attn produces NaN in the model's forward_mixed path)
-    h_q, h_kv = q.shape[2], k.shape[2]
-    if h_q != h_kv:
-        return _sdpa_attn_func(q, k, v, dropout_p=dropout_p, softmax_scale=softmax_scale, causal=causal)
-    # Standard MHA — use flash_attn
     if _HAS_FLASH_ATTN and q.device.type == "cuda":
         return flash_attn_func(q, k, v, dropout_p=dropout_p, softmax_scale=softmax_scale, causal=causal)
     return _sdpa_attn_func(q, k, v, dropout_p=dropout_p, softmax_scale=softmax_scale, causal=causal)
@@ -794,9 +777,7 @@ class Qwen3Attention(nn.Module):
             q = query_states.transpose(1, 2).contiguous()
             k = key_states.transpose(1, 2).contiguous()
             v = value_states.transpose(1, 2).contiguous()
-            # Use block causal mask if available (for it2i generation prefill)
-            attn_mask = attention_mask if isinstance(attention_mask, torch.Tensor) else None
-            attn_output = _flash_or_sdpa(q, k, v, dropout_p=0.0, softmax_scale=self.scaling, causal=True, attn_mask=attn_mask)
+            attn_output = _flash_or_sdpa(q, k, v, dropout_p=0.0, softmax_scale=self.scaling, causal=True)
             attn_output = attn_output.reshape(*input_shape, -1).contiguous()
 
         attn_output = self.o_proj(attn_output)
@@ -1719,7 +1700,7 @@ class NEOChatModel(PreTrainedModel):
 
         return input_embeds, indexes, attention_mask
 
-    def _it2i_prefix_forward(self, input_embeds, indexes, attention_mask, gen_indicators=None):
+    def _it2i_prefix_forward(self, input_embeds, indexes, attention_mask):
         past_key_values = DynamicCache()
         out = self.language_model.model(
             inputs_embeds=input_embeds,
@@ -1727,7 +1708,6 @@ class NEOChatModel(PreTrainedModel):
             attention_mask=attention_mask,
             past_key_values=past_key_values,
             use_cache=True,
-            image_gen_indicators=gen_indicators.view(1, -1) if gen_indicators is not None else None,
         )
         return out.past_key_values, out.last_hidden_state
 
