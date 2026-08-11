@@ -240,7 +240,10 @@ def main():
     p_run.add_argument("--output-dir", required=True, help="Output directory for results")
     p_run.add_argument("--views", default=None, help="Comma-separated views (e.g. sat,webrd04)")
     p_run.add_argument("--tasks", default=None, help="Comma-separated tasks (e.g. t1,t2)")
-    p_run.add_argument("--variants", default=None, help="Comma-separated variants (e.g. direct,oracle)")
+    p_run.add_argument(
+        "--variants", default=None,
+        help="Comma-separated evidence conditions (direct,oracle,wrong_oracle,shuffled_oracle,masked_prompt)",
+    )
     p_run.add_argument("--batch-size", type=int, default=0, help="Batch size (0=auto)")
     p_run.add_argument("--skip-preflight", action="store_true", help="Skip image preflight")
     p_run.add_argument("--allow-missing", type=int, default=0, help="Allow N missing images")
@@ -254,7 +257,10 @@ def main():
     p_pf.add_argument("--data-dir", required=True, help="Path to data/ directory")
     p_pf.add_argument("--views", default=None)
     p_pf.add_argument("--tasks", default=None)
-    p_pf.add_argument("--variants", default=None)
+    p_pf.add_argument(
+        "--variants", default=None,
+        help="Comma-separated evidence conditions (direct,oracle,wrong_oracle,shuffled_oracle,masked_prompt)",
+    )
     p_pf.add_argument("--output", default=None, help="Write report to JSON file")
     p_pf.add_argument("--allow-missing", action="store_true", help="Don't exit non-zero on issues")
     p_pf.set_defaults(func=cmd_preflight)

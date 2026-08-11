@@ -23,6 +23,7 @@ class Cell:
     view: str
     task: str
     variant: str
+    evidence_condition: str = ""
     total: int = 0           # input sample count (stable across re-runs)
     answered: int = 0        # predictions with valid text
     errors: int = 0          # predictions with error
@@ -40,11 +41,13 @@ class Cell:
         return self.answered / self.total if self.total else 0.0
 
     def to_dict(self) -> dict:
+        condition = self.evidence_condition or _condition_from_variant(self.variant)
         return {
             "strategy": self.strategy,
             "view": self.view,
             "task": self.task,
             "variant": self.variant,
+            "evidence_condition": condition,
             "total": self.total,
             "answered": self.answered,
             "errors": self.errors,
@@ -55,6 +58,13 @@ class Cell:
             "avg_rounds": round(self.avg_rounds, 2),
             "unconfident_extract": self.unconfident_extract,
         }
+
+
+def _condition_from_variant(variant: str) -> str:
+    """Keep summaries meaningful for legacy JSONL without condition metadata."""
+    if variant in {"wrong_oracle", "shuffled_oracle", "masked_prompt"}:
+        return variant
+    return "oracle" if variant == "oracle" else "direct"
 
 
 def build_summary(
@@ -110,6 +120,21 @@ def build_summary(
     for v, d in by_view.items():
         d["accuracy"] = round(d["correct"] / d["answered"], 4) if d["answered"] else 0.0
 
+    # Aggregate by evidence condition. This is separate from strategy/track:
+    # wrong, shuffled, and masked are dataset controls, not model tracks.
+    by_evidence_condition: dict[str, dict[str, Any]] = {}
+    for cell in cells:
+        condition = cell.evidence_condition or _condition_from_variant(cell.variant)
+        d = by_evidence_condition.setdefault(
+            condition, {"total": 0, "answered": 0, "correct": 0, "cells": 0}
+        )
+        d["total"] += cell.total
+        d["answered"] += cell.answered
+        d["correct"] += cell.correct
+        d["cells"] += 1
+    for d in by_evidence_condition.values():
+        d["accuracy"] = round(d["correct"] / d["answered"], 4) if d["answered"] else 0.0
+
     return {
         "schema_version": 1,
         "model": model,
@@ -119,6 +144,7 @@ def build_summary(
         "by_strategy": by_strategy,
         "by_task": by_task,
         "by_view": by_view,
+        "by_evidence_condition": by_evidence_condition,
     }
 
 

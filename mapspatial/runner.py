@@ -87,6 +87,8 @@ def build_result_record(
         "view": meta.get("view", ""),
         "variant": meta.get("variant", ""),
         "oracle": meta.get("oracle", False),
+        "evidence_condition": meta.get("evidence_condition", "direct"),
+        "track": meta.get("track", "") or _infer_track(strategy, meta),
         "task_id": meta.get("task_id", ""),
         "question_type": meta.get("question_type", ""),
         "images": meta.get("images", []),
@@ -121,6 +123,27 @@ def build_result_record(
                 break
 
     return record
+
+
+def _infer_track(strategy: str, meta: dict) -> str:
+    """Provide a protocol label while remaining compatible with old JSONL."""
+    condition = meta.get("evidence_condition", "direct")
+    if strategy == "direct" and condition != "direct":
+        return "O"
+    if strategy == "direct":
+        return "U"
+    if strategy == "native_interleave":
+        return "C"
+    if strategy == "external_draw":
+        return "G"
+    return ""
+
+
+def _condition_from_variant_name(variant: str) -> str:
+    """Normalize legacy variant names into the evidence-condition dimension."""
+    if variant in {"wrong_oracle", "shuffled_oracle", "masked_prompt"}:
+        return variant
+    return "oracle" if variant == "oracle" else "direct"
 
 
 def run(
@@ -220,6 +243,7 @@ def run(
         cell = Cell(
             strategy=strategy_name,
             view=view, task=task, variant=variant,
+            evidence_condition=_condition_from_variant_name(variant),
             total=len(samples),
         )
 
@@ -391,6 +415,7 @@ def _recompute_cells(
 
                 cell = Cell(
                     strategy=strategy, view=view, task=task, variant=variant,
+                    evidence_condition=_condition_from_variant_name(variant),
                     total=total,
                 )
 

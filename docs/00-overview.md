@@ -8,8 +8,8 @@ MapSpatial-EvalKit 在一套统一的数据与评测口径下，跑通并对比�
 
 | 类别 | 数量 | 代表 |
 |---|---|---|
-| 纯多模态理解模型 | 14 | Qwen3-VL、Qwen2.5-VL、InternVL3、GLM-4.6V、Step3-VL、MiMo-Embodied、SenseNova-SI、Cambrian-S、ViLaSR、Spatial-MLLM |
-| 多模态生成+理解统一模型 | 6 | Bagel、ThinkMorph、BLIP3o、SenseNova-U1、LatentUM、Janus-Pro |
+| 纯多模态理解模型 | 20 | Qwen/InternVL/GLM/Step3-VL、MiMo-Embodied、SenseNova-SI、Cambrian-S、ViLaSR、Spatial-MLLM 等 |
+| 多模态生成+理解统一模型 | 8 | Bagel、ThinkMorph、BLIP3o、SenseNova-U1、LatentUM、Janus-Pro、Show-o2、JoyAI-Image |
 
 ### 核心科学问题
 
@@ -31,7 +31,7 @@ MapSpatial-EvalKit 在一套统一的数据与评测口径下，跑通并对比�
 
 数据来自 `/home/ximeng.czq/caoziqi/code/SpatialIntelligence/SpatialIntelligence-gate2building`：
 
-- 标签：`data-jsonl/{view}/{task}/{variant}.jsonl` —— 3 视图 × 4 任务 × 2 变体 = 24 个文件
+- 标签：`data-jsonl/{view}/{task}/{variant}.jsonl` —— 证据条件由数据集 manifest 声明
 - 图像：`data/benchmark_images_t{1..4}/<case_id>/<scheme>/*.png`
 
 | 任务 | 类型 | question_type | 样本数 |
@@ -42,7 +42,7 @@ MapSpatial-EvalKit 在一套统一的数据与评测口径下，跑通并对比�
 | T4 | path_reasoning | `route_validity`、`waypoint_ordering` | 2096（blank 视图缺失） |
 
 - 视图：`sat`（卫星）/ `webrd04`（路网）/ `blank`（空白底图）
-- 变体：`direct`（仅原图）/ `oracle`（带标注辅助图）
+- 证据条件：`direct`、`oracle`、`wrong_oracle`、`shuffled_oracle`、`masked_prompt`
 - 全部为 A–D 四选一，指标 `exact_match`
 
 **注意**：T4 `route_validity` 每条样本带 **4 张图**（4 个候选路线选项各一张）。这是多图支持的硬需求，不是可选项。详见 [02-data-pipeline.md](./02-data-pipeline.md)。
@@ -142,9 +142,13 @@ class Capabilities(NamedTuple):
 
 | Strategy | 适用 | 说明 |
 |---|---|---|
-| `direct` | 全部 20 个模型 | 直接作答 |
+| `direct` | 全部模型 | 直接作答 |
 | `native_interleave` | `caps.native_interleave` | 委托模型原生的交错循环（单一 KV-cache 跨轮） |
-| `external_draw` | `caps.draw` | 外部编排 draw → understand |
+| `external_draw` | `caps.draw` | 外部编排 draw → understand，作为解耦 G2U |
+
+Track 映射为：`direct + direct` 是 Track U，`direct + oracle` 是 Track O，
+`external_draw` 是 Track G/解耦 G2U，`native_interleave` 是 Track C。
+`wrong_oracle`、`shuffled_oracle` 和 `masked_prompt` 只改变证据条件，不创建新 Track。
 
 能力检查在**启动时** fail-fast，不允许跑到一半才报错。
 

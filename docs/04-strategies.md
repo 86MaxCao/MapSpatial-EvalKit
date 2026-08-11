@@ -74,7 +74,7 @@ class DirectStrategy(Strategy):
 ### 用途
 
 1. **14 个纯理解模型的唯一策略**
-2. **6 个统一模型的基线条件**——回答「不画的时候它们表现如何」
+2. **8 个统一模型的基线条件**——回答「不画的时候它们表现如何」
 
 第 2 点容易被忽略但很重要：如果 Bagel 在 `direct` 下就已经比 Qwen3-VL 强，那么「生成能力带来提升」的结论需要更小心的归因（可能只是模型本身更强，与画图无关）。
 
@@ -249,12 +249,14 @@ class ExternalDrawStrategy(Strategy):
 
 | question_type | 绘图指令方向 |
 |---|---|
-| `direction` | 画出从绿点到紫点的方向箭头 |
-| `nearest_point` | 标出参考点到各候选点的连线 |
-| `composite_route_distance` | 描出两条待比较路线 |
-| `segment_building_count` | 高亮指定路段的指定一侧 |
-| `route_validity` | 标注每个候选路线的走向 |
-| `waypoint_ordering` | 按序连接途经点 |
+| `direction` / `dual_anchor_direction` | 画蓝色方向箭头或参考射线 |
+| `directional_nearest_point` / `nearest_point` | 画参考点到候选点的蓝色测量线 |
+| `egocentric_side` / `angular_order` | 画朝向轴或从参考点发出的蓝色射线 |
+| `composite_euclidean_distance` | 画待比较的蓝色直线段 |
+| `composite_network_distance` | 画完整蓝色路网路线，包括 via 点 |
+| `segment_building_count` / `route_cumulative_count` | 高亮路段及相关建筑侧区域 |
+| `route_validity` | 对四张候选路线图分别保留路线证据，不写答案 |
+| `waypoint_ordering` | 按空间顺序画连续蓝色路线 |
 
 这些指令模板放 `configs/strategies/external_draw.yaml`，可迭代调整。**指令质量直接决定这个条件的实验结论**，需要先在小样本上人工检查生成图是否合理，再跑全量。
 
@@ -273,8 +275,8 @@ class ExternalDrawStrategy(Strategy):
 ## 6. 实验矩阵
 
 ```
-14 个纯理解模型  × direct                                    = 14 组
-6 个统一模型     × {direct, native_interleave, external_draw} ≤ 18 组
+20 个纯理解模型  × direct                                    = 20 组
+8 个统一模型     × {direct, native_interleave, external_draw} ≤ 24 组
 ```
 
 实际组数取决于每个统一模型的能力（`native_interleave` 需 `caps.native_interleave=True`）。config 里逐模型声明：

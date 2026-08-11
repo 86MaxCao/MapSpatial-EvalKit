@@ -11,12 +11,12 @@
 ```
 data-jsonl/
 ├── manifest.json
-├── sat/{t1,t2,t3,t4}/{direct,oracle}.jsonl
-├── webrd04/{t1,t2,t3,t4}/{direct,oracle}.jsonl
-└── blank/{t1,t2,t3,t4}/{direct,oracle}.jsonl
+├── sat/{t1,t2,t3,t4}/{direct,oracle,wrong_oracle,shuffled_oracle,masked_prompt}.jsonl
+├── webrd04/{t1,t2,t3,t4}/{direct,oracle,wrong_oracle,shuffled_oracle,masked_prompt}.jsonl
+└── blank/{t1,t2,t3,t4}/{direct,oracle,wrong_oracle,shuffled_oracle,masked_prompt}.jsonl
 ```
 
-3 视图 × 4 任务 × 2 变体 = **24 个 JSONL**。
+3 视图 × 4 任务 × 5 证据条件 = **60 个 JSONL**（T4 不适用的 blank 文件可以为空）。
 
 ### 1.2 图像
 
@@ -32,9 +32,9 @@ data/benchmark_images_t{1,2,3,4}/<case_id>/<scheme>/*.png
 
 | 任务 | question_type | 每文件样本数 | 视图覆盖 |
 |---|---|---|---|
-| t1 | `direction` | 3029 | 全 3 视图 |
-| t2 | `nearest_point`、`composite_route_distance` | 5760 | 全 3 视图 |
-| t3 | `segment_building_count` | 6665 | 全 3 视图 |
+| t1 | `direction`、`directional_nearest_point`、`dual_anchor_direction`、`egocentric_side`、`angular_order` | 以 manifest 为准 | 全部可用视图 |
+| t2 | `nearest_point`、`directional_nearest_point`、`composite_euclidean_distance`、`composite_network_distance` | 以 manifest 为准 | 全部可用视图 |
+| t3 | `segment_building_count`、`route_cumulative_count` | 以 manifest 为准 | 全部可用视图 |
 | t4 | `route_validity`、`waypoint_ordering` | 2096 | **仅 sat / webrd04**（blank 为 0） |
 
 `blank/t4/*.jsonl` 是空文件（`manifest.json` 的 `missing_view.blank.t4 = 2096`）。加载层必须容忍空文件，不能报错。
@@ -54,8 +54,10 @@ data/benchmark_images_t{1,2,3,4}/<case_id>/<scheme>/*.png
 | `answer` | str | 金标准，A–D |
 | `images` | list[str] | 相对路径列表。**t4 route_validity 长度为 4，其余为 1** |
 | `task_id` | str | `T1`–`T4` |
-| `question_type` | str | 6 种之一，见上表 |
-| `view` / `variant` / `oracle` | str/str/bool | 实验条件维度 |
+| `question_type` | str | 当前 T1--T4 子任务之一，见上表 |
+| `view` / `variant` / `oracle` | str/str/bool | 兼容字段 |
+| `evidence_condition` | str | `direct`、`oracle`、`wrong_oracle`、`shuffled_oracle` 或 `masked_prompt` |
+| `track` | str | 可选的 `U/O/G/C` 协议标签 |
 
 `question` 示例（t1）：
 

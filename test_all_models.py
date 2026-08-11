@@ -1,8 +1,8 @@
 #!/usr/bin/env python
-"""Unified test script for all 9 models (understand + draw).
+"""Unified test script for the eight paper UMMs (understand + draw).
 
 Models: Bagel, ThinkMorph, BLIP3o, U1 (SenseNova-U1), LatentUM, Janus,
-         InternVL-U, Show-o2, JoyAI-Image
+         Show-o2, JoyAI-Image
 
 Usage:
   python test_all_models.py --model bagel --phase understand
@@ -917,7 +917,6 @@ MODEL_REGISTRY = {
     "u1":         {"understand": u1_understand,     "draw": u1_draw},
     "latentum":   {"understand": latentum_understand, "draw": latentum_draw},
     "janus":      {"understand": janus_understand,  "draw": janus_draw},
-    "internvlu":  {"understand": internvlu_understand, "draw": internvlu_draw},
     "showo2":     {"understand": showo2_understand,  "draw": showo2_draw},
     "joyai":      {"understand": joyai_understand,   "draw": joyai_draw},
 }

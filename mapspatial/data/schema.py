@@ -1,6 +1,7 @@
 """JSONL record → TaskSample conversion.
 
-Fields we use: id, question, answer, images, task_id, question_type, view, variant, oracle.
+Fields we use: id, question, answer, images, task_id, question_type, view, variant,
+oracle, evidence_condition, track.
 Fields we don't put in Message: answer (gold only), input_images/image (redundant with images),
 conversations (ShareGPT training format, not needed for inference).
 """
@@ -45,6 +46,11 @@ def parse_record(record: dict, data_root: Path) -> TaskSample:
         "task_id": task_id,
         "question_type": question_type,
         "oracle": record.get("oracle", False),
+        "evidence_condition": record.get(
+            "evidence_condition",
+            _infer_evidence_condition(record),
+        ),
+        "track": record.get("track", ""),
         "images": image_rels,
         "sample_id": record.get("sample_id", ""),
         "case_id": record.get("case_id", ""),
@@ -53,6 +59,16 @@ def parse_record(record: dict, data_root: Path) -> TaskSample:
     }
 
     return TaskSample(id=sample_id, message=message, gold=gold, meta=meta)
+
+
+def _infer_evidence_condition(record: dict) -> str:
+    """Infer the legacy condition name when new metadata is absent."""
+    variant = str(record.get("variant", "")).lower()
+    if variant in {"wrong_oracle", "shuffled_oracle", "masked_prompt"}:
+        return variant
+    if record.get("oracle", False) or variant == "oracle":
+        return "oracle"
+    return "direct"
 
 
 def _build_message(
