@@ -137,13 +137,18 @@ class APIBackend(Backend):
                 content.append({"type": "text", "text": item["value"]})
 
         messages_payload = [{"role": "user", "content": content}]
-        if self._cfg.system_prompt:
-            messages_payload.insert(0, {"role": "system", "content": self._cfg.system_prompt})
+        # Per-cell system prompt (from records) takes precedence over the
+        # static YAML-level one.
+        system_prompt = gen_kw.get("system_prompt") or self._cfg.system_prompt
+        if system_prompt:
+            messages_payload.insert(0, {"role": "system", "content": system_prompt})
 
         payload = {
             "model": self._cfg.backend_args.get("api_model", self._model_name),
             "messages": messages_payload,
             "modalities": ["text"],
+            "temperature": float(gen_kw.get("temperature", 0.0)),
+            "max_tokens": int(gen_kw.get("max_new_tokens", 2048)),
         }
         if self._enable_thinking:
             payload["enable_thinking"] = True

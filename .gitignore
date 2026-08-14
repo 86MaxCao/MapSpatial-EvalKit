@@ -30,6 +30,9 @@ gen_results/
 # Test scripts (diagnostic/temporary)
 diag_*.py
 
+# Internal API launcher (contains endpoints/keys)
+run_api.sh
+
 # Environment
 .env
 .env.local

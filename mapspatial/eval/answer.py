@@ -45,6 +45,76 @@ _SHORT_PREFIX_RE = re.compile(r"^([A-Z])[.\s]", re.IGNORECASE)
 
 _THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
 
+# Filler words stripped before comparing a free-text answer to option texts
+# (models often answer "blue point, red point" for option "blue, red").
+_TEXT_STOPWORDS = {
+    "the", "a", "an", "is", "are", "to", "of", "and", "in", "on", "at",
+    "it", "its", "point", "points", "marker", "markers",
+}
+
+
+def _norm_text(s: str) -> str:
+    return re.sub(r"\s+", " ", s.strip().lower().rstrip(".!?"))
+
+
+def _squash_text(s: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", s.lower())
+
+
+def _tokens(s: str) -> list[str]:
+    return [t for t in re.split(r"[^a-z0-9]+", s.lower()) if t]
+
+
+def _match_option_text(clean_text: str, sample_meta: dict | None) -> str | None:
+    """Match a free-text answer back to its option letter; None when unmappable."""
+    if sample_meta is None:
+        return None
+    mc = sample_meta.get("multiple_choice") or {}
+    choices = [(c.get("key", "").upper(), str(c.get("text", ""))) for c in mc.get("choices", [])]
+    choices = [(k, t) for k, t in choices if k and t]
+    if not choices:
+        return None
+
+    norm = _norm_text(clean_text)
+    squashed = _squash_text(clean_text)
+
+    # exact text match (also symbol-insensitive: "South-East" vs "southeast")
+    for key, text in choices:
+        if norm == _norm_text(text) or (
+            len(squashed) > 2 and squashed == _squash_text(text)
+        ):
+            return key
+
+    # numeric match ("4.0" vs "4")
+    try:
+        pred_num = float(norm)
+    except ValueError:
+        pred_num = None
+    if pred_num is not None:
+        for key, text in choices:
+            try:
+                if float(_norm_text(text)) == pred_num:
+                    return key
+            except ValueError:
+                continue
+
+    # token-sequence match after dropping filler words ("blue point, red point" → "blue, red")
+    pred_seq = [t for t in _tokens(clean_text) if t not in _TEXT_STOPWORDS]
+    if pred_seq:
+        seq_hits = [
+            key for key, text in choices
+            if [t for t in _tokens(text) if t not in _TEXT_STOPWORDS] == pred_seq
+        ]
+        if len(set(seq_hits)) == 1:
+            return seq_hits[0]
+
+    # substring containment, most specific (longest) option first
+    for key, text in sorted(choices, key=lambda kt: len(kt[1]), reverse=True):
+        if len(norm) > len(_norm_text(text)) and _norm_text(text) in norm:
+            return key
+
+    return None
+
 
 def _normalize_letters(match_str: str) -> str:
     """Sort and deduplicate letters from a comma-separated match."""
@@ -85,7 +155,8 @@ def extract_answer(
       3. Chinese "答案：X" pattern
       4. "is X" / "= X" near end
       5. Single letter at start of response (short response)
-      6. Last valid letter in text (fallback, not confident)
+      6. Free-text answer matched back to an option letter (option_text)
+      7. Last valid letter in text (fallback, not confident)
 
     For thinking/CoT output, <think>...</think> is stripped before extraction.
     """
@@ -156,7 +227,12 @@ def extract_answer(
             if letter in valid_set:
                 return ExtractResult(answer=letter, method="short_prefix", confident=True)
 
-    # 6. Fallback: last valid letter in text
+    # 6. Free-text answer matched back to an option letter
+    key = _match_option_text(clean_text, sample_meta)
+    if key:
+        return ExtractResult(answer=key, method="option_text", confident=True)
+
+    # 7. Fallback: last valid letter in text
     all_letters = re.findall(r"\b([A-Z])\b", clean_text)
     valid_found = [l for l in all_letters if l.upper() in valid_set]
     if valid_found:

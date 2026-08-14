@@ -9,10 +9,30 @@ conversations (ShareGPT training format, not needed for inference).
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 from ..types import TaskSample, Message
 from ..messages import strip_placeholders
+
+
+def _gold_from_record(record: dict) -> tuple[str, str]:
+    """(gold, gold_text) — normalize gold to an option letter when possible."""
+    answer = record.get("answer", "")
+    text = "" if answer is None else str(answer).strip()
+
+    letter = record.get("answer_letter")
+    if not letter:
+        for opt in record.get("options", []):
+            m = re.match(r"^([A-Z])[.\s]\s*(.+)$", str(opt).strip(), re.IGNORECASE)
+            if m and m.group(2).strip() == text:
+                letter = m.group(1).upper()
+                break
+    if not letter and re.fullmatch(r"[A-Z](\s*,\s*[A-Z])*", text, re.IGNORECASE):
+        letter = text.upper()
+
+    gold = str(letter).strip() if letter else text
+    return gold, text
 
 
 def parse_record(record: dict, data_root: Path) -> TaskSample:
@@ -22,7 +42,8 @@ def parse_record(record: dict, data_root: Path) -> TaskSample:
     gold is isolated in TaskSample.gold, never in Message.
     """
     sample_id = record.get("id", "")
-    question = record.get("question", "")
+    # question_with_options embeds the option list; bare question hides options
+    question = record.get("question_with_options") or record.get("question", "")
     # strip any placeholders that might sneak in from the question field
     question = strip_placeholders(question)
 
@@ -35,20 +56,24 @@ def parse_record(record: dict, data_root: Path) -> TaskSample:
     task_id = record.get("task_id", "")
     question_type = record.get("question_type", "")
     multiple_choice = record.get("multiple_choice")
+    options = record.get("options", [])
 
-    message = _build_message(question, image_abs, task_id, question_type, multiple_choice)
+    message = _build_message(
+        question, image_abs, task_id, question_type, multiple_choice, options
+    )
 
-    gold = record.get("answer", "")
+    gold, gold_text = _gold_from_record(record)
 
     meta = {
-        "view": record.get("view", ""),
+        "view": record.get("view", "") or record.get("tile_type", ""),
         "variant": record.get("variant", ""),
         "task_id": task_id,
         "question_type": question_type,
         "oracle": record.get("oracle", False),
-        "evidence_condition": record.get(
-            "evidence_condition",
-            _infer_evidence_condition(record),
+        "evidence_condition": (
+            record.get("evidence_condition")
+            or record.get("mode")
+            or _infer_evidence_condition(record)
         ),
         "track": record.get("track", ""),
         "images": image_rels,
@@ -56,6 +81,8 @@ def parse_record(record: dict, data_root: Path) -> TaskSample:
         "case_id": record.get("case_id", ""),
         "scheme": record.get("scheme", ""),
         "multiple_choice": multiple_choice,
+        "system_prompt": record.get("system_prompt", ""),
+        "gold_text": gold_text,
     }
 
     return TaskSample(id=sample_id, message=message, gold=gold, meta=meta)
@@ -77,6 +104,7 @@ def _build_message(
     task_id: str,
     question_type: str,
     multiple_choice: dict | None,
+    options: list | None = None,
 ) -> Message:
     """Construct interleaved Message from question + image paths.
 
@@ -84,7 +112,9 @@ def _build_message(
     Multi image (t4 route_validity, 4 images): [text, image, text, image, ...]
     """
     if question_type == "route_validity" and len(image_paths) > 1:
-        return _build_multi_image_message(question, image_paths, multiple_choice)
+        return _build_multi_image_message(
+            question, image_paths, multiple_choice, options or []
+        )
 
     # Default: image(s) first, then text (image-initial for Bagel compatibility)
     msg: Message = []
@@ -98,35 +128,41 @@ def _build_multi_image_message(
     question: str,
     image_paths: list[Path],
     multiple_choice: dict | None,
+    options: list,
 ) -> Message:
     """Build interleaved text+image message for T4 route_validity.
 
     Format:
       [text "Which route is valid... Option A:", image A, text "Option B:", image B, ...]
-    """
-    msg: Message = []
-    # Extract option labels from multiple_choice if available
-    choices = multiple_choice.get("choices", []) if multiple_choice else []
-    if choices and len(choices) == len(image_paths):
-        # Prepend the question (without the options part, since we interleave)
-        # The question field already contains the full question including options
-        # We need to reconstruct the interleave format
-        prompt = multiple_choice.get("prompt", question)
-        # Split: put prompt first, then interleaved options
-        # For route_validity, the prompt is like "Which route...?\n\nOption A: ...\nOption B: ..."
-        # We'll just use the question as-is before the first option
-        msg.append({"type": "text", "value": prompt})
-        for i, (choice, img) in enumerate(zip(choices, image_paths)):
-            key = choice.get("key", chr(ord("A") + i))
-            msg.append({"type": "image", "value": img})
-            if i < len(choices) - 1:
-                msg.append({"type": "text", "value": f"Option {chr(ord('A') + i + 1)}:"})
-    else:
-        # Fallback: text first, then images
-        msg.append({"type": "text", "value": question})
-        for p in image_paths:
-            msg.append({"type": "image", "value": p})
 
+    Option keys come from multiple_choice.choices, or are parsed from the
+    options strings ("A. red line" → "A") when multiple_choice is absent.
+    """
+    keys: list[str] = []
+    if multiple_choice and multiple_choice.get("choices"):
+        keys = [
+            str(c.get("key", chr(ord("A") + i)))
+            for i, c in enumerate(multiple_choice["choices"])
+        ]
+    else:
+        for i, opt in enumerate(options):
+            m = re.match(r"^([A-Z])[.\s]", str(opt).strip(), re.IGNORECASE)
+            keys.append(m.group(1).upper() if m else chr(ord("A") + i))
+
+    prompt = multiple_choice.get("prompt", question) if multiple_choice else question
+
+    if keys and len(keys) == len(image_paths):
+        msg: Message = [{"type": "text", "value": prompt}]
+        for i, img in enumerate(image_paths):
+            msg.append({"type": "image", "value": img})
+            if i < len(keys) - 1:
+                msg.append({"type": "text", "value": f"Option {keys[i + 1]}:"})
+        return msg
+
+    # Fallback: text first, then images
+    msg = [{"type": "text", "value": question}]
+    for p in image_paths:
+        msg.append({"type": "image", "value": p})
     return msg
 
 

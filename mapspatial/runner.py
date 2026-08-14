@@ -140,10 +140,16 @@ def _infer_track(strategy: str, meta: dict) -> str:
 
 
 def _condition_from_variant_name(variant: str) -> str:
-    """Normalize legacy variant names into the evidence-condition dimension."""
-    if variant in {"wrong_oracle", "shuffled_oracle", "masked_prompt"}:
-        return variant
-    return "oracle" if variant == "oracle" else "direct"
+    """Normalize legacy variant names into the evidence-condition dimension.
+
+    Variant may carry directory components for layered datasets
+    (e.g. "base/oracle", "world/intervention_001/direct") — judge by the
+    final path segment.
+    """
+    leaf = variant.rsplit("/", 1)[-1]
+    if leaf in {"wrong_oracle", "shuffled_oracle", "masked_prompt"}:
+        return leaf
+    return "oracle" if leaf == "oracle" else "direct"
 
 
 def run(
@@ -220,6 +226,18 @@ def run(
         ctx.view = view
         ctx.task = task
         ctx.variant = variant
+
+        # Records may carry a per-cell system prompt (e.g. paper-v8 view
+        # conventions); surface it to backends via gen_kw. It is constant
+        # within a cell, so one lookup suffices.
+        cell_system_prompt = next(
+            (s.meta["system_prompt"] for s in samples if s.meta.get("system_prompt")),
+            None,
+        )
+        if cell_system_prompt:
+            ctx.gen_kw = {**gen_kw, "system_prompt": cell_system_prompt}
+        else:
+            ctx.gen_kw = gen_kw
 
         # Output path for this cell
         if cfg.world_size > 1:
