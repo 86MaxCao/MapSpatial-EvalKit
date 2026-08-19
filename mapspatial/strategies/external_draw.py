@@ -102,7 +102,8 @@ class ExternalDrawStrategy(Strategy):
         ]
 
         t0 = time.time()
-        preds = backend.understand([augmented_msg], **ctx.gen_kw)
+        messages = self._inject_system_prompt([augmented_msg], ctx.gen_kw)
+        preds = backend.understand(messages, **ctx.gen_kw)
         elapsed_understand = time.time() - t0
 
         pred = preds[0] if preds else Prediction(error="understand returned empty")

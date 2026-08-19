@@ -3,9 +3,9 @@
 MapSpatial-EvalKit 是一个面向**户外地图空间理解**的多模态推理与评测工具包。它在统一的数据格式、推理接口和评测口径下，支持运行和比较多种视觉语言模型及视觉生成模型。
 
 - **多模态理解模型**（17 个）：Qwen2-VL、Qwen2.5-VL、Qwen3-VL、InternVL3、GLM-4.6V、Step3-VL、MiMo-Embodied、Cambrian-S、ViLaSR、Spatial-MLLM、SenseNova-SI，以及 Gemini 3 Flash、Qwen3.5 Plus、Qwen3.6 Plus API 模型。
-- **多模态生成+理解统一模型**（10 个）：Bagel、ThinkMorph、BLIP3o、SenseNova-U1、LatentUM、Janus-Pro、InternVL-U、JoyAI-Image、Ming-UniVision、Show-o2。
+- **多模态生成+理解统一模型**（8 个）：Bagel、ThinkMorph、BLIP3o、SenseNova-U1、LatentUM、Janus-Pro、JoyAI-Image、Show-o2。
 
-当前仓库包含 **27 个模型配置**。配置文件位于 `configs/models/`，实际运行还取决于对应模型权重、API 凭据和可选依赖是否已准备好。
+当前仓库包含 **25 个模型配置**。配置文件位于 `configs/models/`，实际运行还取决于对应模型权重、API 凭据和可选依赖是否已准备好。
 
 后者能在推理过程中**生成中间图像**（视觉思维链），这是本项目要验证的核心假设：*让模型画出中间草图，是否真的提升空间理解准确率？*
 

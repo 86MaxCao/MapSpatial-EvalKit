@@ -1,0 +1,9 @@
+# Default generation config for SenseNova-SI vendored models.
+# Aligned with official SenseNova-SI repo (config/default.yaml).
+default_generation_config:
+  do_sample: false
+  max_new_tokens: 8192
+  top_p: 1.0
+  temperature: 0.0
+  repetition_penalty: 1
+  num_beams: 1

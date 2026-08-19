@@ -43,7 +43,7 @@ class SenseNovaSIBackend(Backend):
 
         self._is_bagel = "bagel" in model_id.lower()
 
-        from ...vendor.sensenova_si_pkg import get_model, SenseNovaSIBagelModel
+        from ..vendor.sensenova_si_pkg import get_model, SenseNovaSIBagelModel
 
         if self._is_bagel:
             mode = cfg.backend_args.get("mode", "understanding")

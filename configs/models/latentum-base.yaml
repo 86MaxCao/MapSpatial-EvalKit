@@ -6,10 +6,15 @@ model_path: ${CKPT_DIR}/LatentUM-Base
 load:
   dtype: bfloat16
   device: cuda
+  # Force SDPA: in transformers 5.x the default flash_attention_2 path is broken
+  # (create_causal_mask=None + causal=False during decode) → output degenerates
+  # to repeated token-0 ("A!!!..."). SDPA uses explicit 4D causal mask. See
+  # docs/latentum-transformers5-flash-attn-bug.md.
+  attn_implementation: sdpa
 
 generate:
   temperature: 0.0
-  max_new_tokens: 512
+  max_new_tokens: 128
 
 backend_args:
   cfg_scale: 3.0

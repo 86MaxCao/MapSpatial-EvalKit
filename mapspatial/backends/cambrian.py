@@ -43,10 +43,10 @@ class CambrianBackend(Backend):
         self._device = device if ":" in device else "cuda:0"
 
         # Import from vendored cambrian package
-        from ...vendor.cambrian.cambrian_pkg.constants import IMAGE_TOKEN_INDEX
-        from ...vendor.cambrian.cambrian_pkg.conversation import conv_templates
-        from ...vendor.cambrian.cambrian_pkg.model.builder import load_pretrained_model
-        from ...vendor.cambrian.cambrian_pkg.mm_utils import (
+        from ..vendor.cambrian.cambrian_pkg.constants import IMAGE_TOKEN_INDEX
+        from ..vendor.cambrian.cambrian_pkg.conversation import conv_templates
+        from ..vendor.cambrian.cambrian_pkg.model.builder import load_pretrained_model
+        from ..vendor.cambrian.cambrian_pkg.mm_utils import (
             tokenizer_image_token, process_images,
             get_model_name_from_path,
         )

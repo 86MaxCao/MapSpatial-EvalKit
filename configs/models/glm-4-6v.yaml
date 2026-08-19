@@ -1,13 +1,13 @@
-# GLM-4.6V via transformers (GLM family, url-style content)
-name: GLM-4.6V
-backend: transformers
-model_path: ${CKPT_DIR}/GLM-4.6V
+# GLM-4.6V via vLLM (url-style content)
+name: GLM-4.6V-Flash
+backend: vllm
+model_path: ${CKPT_DIR}/GLM-4.6V-Flash
 
 load:
-  model_family: glm
-  model_class: Glm4vForConditionalGeneration
   dtype: bfloat16
   trust_remote_code: true
+  max_model_len: 32768
+  gpu_memory_utilization: 0.7
 
 generate:
   temperature: 0.0

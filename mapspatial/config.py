@@ -49,7 +49,12 @@ class BackendConfig:
 
     @property
     def effective_batch_size(self) -> int:
-        return self.batch_size if self.batch_size > 0 else 32
+        if self.batch_size > 0:
+            return self.batch_size
+        # vllm benefits from larger batches (continuous batching); all other
+        # backends process samples serially inside understand(), so batch_size>1
+        # only raises memory pressure (and OOM risk) with no throughput gain.
+        return 32 if self.backend == "vllm" else 1
 
 
 @dataclass

@@ -550,6 +550,7 @@ class VilasrModel:
             limit_mm_per_prompt={"image": 62, "video": 10},
             gpu_memory_utilization=gpu_memory_utilization,
             enable_prefix_caching=True,
+            enforce_eager=True,
         )
         self.processor = AutoProcessor.from_pretrained(model_id)
         self.tokenizer = AutoTokenizer.from_pretrained(model_id)

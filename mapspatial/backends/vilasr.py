@@ -38,7 +38,7 @@ class VilasrBackend(Backend):
         self._cfg = cfg
         model_path = cfg.model_path
 
-        from ...vendor.vilasr_model import VilasrModel
+        from ..vendor.vilasr_model import VilasrModel
 
         temperature = cfg.generate.get("temperature", 0.0)
         max_tokens = cfg.generate.get("max_new_tokens", cfg.generate.get("max_tokens", 262144))

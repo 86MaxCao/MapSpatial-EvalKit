@@ -25,6 +25,7 @@ class DirectStrategy(Strategy):
         ctx: RunContext,
     ) -> list[Prediction]:
         messages = [s.message for s in samples]
+        messages = self._inject_system_prompt(messages, ctx.gen_kw)
         preds = backend.understand(messages, **ctx.gen_kw)
 
         # Ensure meta is set on every prediction

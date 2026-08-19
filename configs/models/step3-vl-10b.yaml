@@ -1,14 +1,13 @@
-# Step3-VL-10B via transformers (GLM family, url-style content)
+# Step3-VL-10B via vLLM (url-style content)
 name: Step3-VL-10B
-backend: transformers
+backend: vllm
 model_path: ${CKPT_DIR}/Step3-VL-10B
 
 load:
-  model_family: glm
-  model_class: AutoModelForCausalLM
-  attn_implementation: sdpa
   dtype: bfloat16
   trust_remote_code: true
+  max_model_len: 32768
+  gpu_memory_utilization: 0.7
 
 generate:
   temperature: 0.0

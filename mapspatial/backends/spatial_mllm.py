@@ -1,8 +1,8 @@
 """Spatial-MLLM backend.
 
-Ported from gate2building backends.py:1475-1658.
-Uses spatialmllm package with VGGT backbone for spatial encoding.
-Requires load_model_and_processor + prepare_spatial_mllm_inputs.
+Vendored from the official Spatial-MLLM repository into
+mapspatial/vendor/spatial_mllm (Qwen2.5-VL + VGGT spatial encoder).
+Uses prepare_spatial_mllm_inputs (vendor/processing.py) for spatial encoding.
 
 Key: padding_side="left" for batched generation.
 """
@@ -42,21 +42,31 @@ class SpatialMLLMBackend(Backend):
         model_path = cfg.model_path
         self._model_type = cfg.backend_args.get("model_type", "spatial-mllm")
 
-        from ...vendor.spatial_mllm.spatial_mllm_model import SpatialMLLM
+        from ..vendor.spatial_mllm.spatial_mllm import (
+            SpatialMLLMConfig,
+            SpatialMLLMForConditionalGeneration,
+        )
+        from ..vendor.spatial_mllm.processing import prepare_spatial_mllm_inputs
+        from transformers import Qwen2_5_VLProcessor
 
-        _spatial_mllm = SpatialMLLM(model_path=model_path)
-        self._model = _spatial_mllm.model
-        self._processor = _spatial_mllm.processor
+        config = SpatialMLLMConfig.from_pretrained(model_path)
+        # transformers 5.8 moved hidden_size into config.text_config; the vendored
+        # connector (get_connector) reads config.hidden_size directly. Restore it.
+        if not getattr(config, "hidden_size", None):
+            import json
+            with open(os.path.join(model_path, "config.json")) as f:
+                config.hidden_size = json.load(f)["hidden_size"]
+        self._model = SpatialMLLMForConditionalGeneration.from_pretrained(
+            model_path,
+            config=config,
+            torch_dtype="bfloat16",
+            device_map="cuda",
+        )
+        self._processor = Qwen2_5_VLProcessor.from_pretrained(model_path)
+        self._prepare_inputs = prepare_spatial_mllm_inputs
         self._model.eval()
         self._device = next(self._model.parameters()).device
         self._model_name = cfg.name
-
-        # prepare_spatial_mllm_inputs is needed for spatial encoding
-        try:
-            from ...vendor.spatial_mllm.spatial_mllm_model import prepare_spatial_mllm_inputs
-            self._prepare_inputs = prepare_spatial_mllm_inputs
-        except ImportError:
-            self._prepare_inputs = None
 
     @property
     def model_name(self) -> str:

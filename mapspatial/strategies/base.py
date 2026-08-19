@@ -52,6 +52,34 @@ class Strategy(ABC):
                     f"Available strategies: {_available_strategies(caps)}"
                 )
 
+    @staticmethod
+    def _inject_system_prompt(messages: list, gen_kw: dict) -> list:
+        """Prepend system_prompt from gen_kw to the first text item of each message.
+
+        Model-agnostic: backends just see the modified text, no per-backend
+        system_prompt handling needed.
+        """
+        sys_prompt = gen_kw.get("system_prompt")
+        if not sys_prompt:
+            return messages
+        result = []
+        for msg in messages:
+            injected = False
+            new_msg = []
+            for item in msg:
+                if item["type"] == "text" and not injected:
+                    new_msg.append({
+                        "type": "text",
+                        "value": f"{sys_prompt}\n\n{item['value']}",
+                    })
+                    injected = True
+                else:
+                    new_msg.append(dict(item))
+            if not injected:
+                new_msg.append({"type": "text", "value": sys_prompt})
+            result.append(new_msg)
+        return result
+
 
 def _available_strategies(caps: Capabilities) -> list[str]:
     """List which strategies are available given the capabilities."""

@@ -25,7 +25,12 @@ from transformers.modeling_outputs import CausalLMOutputWithPast
 from transformers.generation.utils import GenerateOutput
 
 from transformers.cache_utils import Cache, DynamicCache
-from transformers.modeling_attn_mask_utils import _prepare_4d_causal_attention_mask, _prepare_4d_causal_attention_mask_for_sdpa
+try:
+    from transformers.masking_utils import create_causal_mask
+    _NEW_MASKING = True
+except ImportError:
+    from transformers.modeling_attn_mask_utils import _prepare_4d_causal_attention_mask, _prepare_4d_causal_attention_mask_for_sdpa
+    _NEW_MASKING = False
 from transformers.modeling_outputs import BaseModelOutputWithPast, CausalLMOutputWithPast
 from transformers.utils import logging
 
@@ -47,6 +52,9 @@ class CambrianQwenModel(CambrianMetaModel, Qwen2Model):
         # config.num_hidden_layers = 1 # NOTE: for debug only!!!
         if IS_XLA_AVAILABLE:
             config._attn_implementation = "eager"
+        # transformers 5.8: Qwen2Model expects config.layer_types to be a list
+        if not getattr(config, "layer_types", None):
+            config.layer_types = []
         super(CambrianQwenModel, self).__init__(config)
     
     def forward(
@@ -96,7 +104,10 @@ class CambrianQwenModel(CambrianMetaModel, Qwen2Model):
             use_legacy_cache = not isinstance(past_key_values, Cache)
             if use_legacy_cache:
                 past_key_values = DynamicCache.from_legacy_cache(past_key_values)
-            past_key_values_length = past_key_values.get_usable_length(seq_length)
+            if hasattr(past_key_values, "get_usable_length"):
+                past_key_values_length = past_key_values.get_usable_length(seq_length)
+            else:
+                past_key_values_length = past_key_values.get_seq_length() if hasattr(past_key_values, "get_seq_length") else 0
 
         if position_ids is None:
             device = input_ids.device if input_ids is not None else inputs_embeds.device
@@ -110,7 +121,8 @@ class CambrianQwenModel(CambrianMetaModel, Qwen2Model):
         if inputs_embeds is None:
             inputs_embeds = self.embed_tokens(input_ids)
 
-        if attention_mask is not None and self._attn_implementation == "flash_attention_2" and use_cache:
+        _attn_impl = getattr(self, "_attn_implementation", None) or getattr(self.config, "_attn_implementation", "eager")
+        if attention_mask is not None and _attn_impl == "flash_attention_2" and use_cache:
             is_padding_right = attention_mask[:, -1].sum().item() != batch_size
             if is_padding_right:
                 raise ValueError(
@@ -119,10 +131,19 @@ class CambrianQwenModel(CambrianMetaModel, Qwen2Model):
                     " call `tokenizer.padding_side  = 'left'` before tokenizing the input. "
                 )
 
-        if self._attn_implementation == "flash_attention_2":
+        if _attn_impl == "flash_attention_2":
             # 2d mask is passed through the layers
             attention_mask = attention_mask if (attention_mask is not None and 0 in attention_mask) else None
-        elif self._attn_implementation == "sdpa" and not output_attentions:
+        elif _NEW_MASKING:
+            # transformers 5.x: use new masking_utils API
+            attention_mask = create_causal_mask(
+                config=self.config,
+                inputs_embeds=inputs_embeds,
+                attention_mask=attention_mask,
+                past_key_values=past_key_values if isinstance(past_key_values, Cache) else None,
+                position_ids=position_ids,
+            )
+        elif _attn_impl == "sdpa" and not output_attentions:
             # output_attentions=True can not be supported when using SDPA, and we fall back on
             # the manual implementation that requires a 4D causal mask in all cases.
             attention_mask = _prepare_4d_causal_attention_mask_for_sdpa(
@@ -148,6 +169,11 @@ class CambrianQwenModel(CambrianMetaModel, Qwen2Model):
 
         hidden_states = inputs_embeds
 
+        # transformers 5.x: compute rotary position embeddings to pass to decoder layers
+        position_embeddings = None
+        if hasattr(self, "rotary_emb") and self.rotary_emb is not None:
+            position_embeddings = self.rotary_emb(hidden_states, position_ids)
+
         # decoder layers
         all_hidden_states = () if output_hidden_states else None
         all_self_attns = () if output_attentions else None
@@ -166,6 +192,7 @@ class CambrianQwenModel(CambrianMetaModel, Qwen2Model):
                     past_key_values,
                     output_attentions,
                     use_cache,
+                    position_embeddings=position_embeddings,
                 )
             else:
                 layer_outputs = decoder_layer(
@@ -175,9 +202,10 @@ class CambrianQwenModel(CambrianMetaModel, Qwen2Model):
                     past_key_value=past_key_values,
                     output_attentions=output_attentions,
                     use_cache=use_cache,
+                    position_embeddings=position_embeddings,
                 )
 
-            hidden_states = layer_outputs[0]
+            hidden_states = layer_outputs[0] if isinstance(layer_outputs, tuple) else layer_outputs
 
             ############################################################################################
             # Cambrian: For SVA
@@ -278,10 +306,14 @@ class CambrianQwenModel(CambrianMetaModel, Qwen2Model):
             ############################################################################################
 
             if use_cache:
-                next_decoder_cache = layer_outputs[2 if output_attentions else 1]
+                # transformers 5.x: decoder layer returns tensor directly, cache is in-place in past_key_values
+                if isinstance(layer_outputs, tuple):
+                    next_decoder_cache = layer_outputs[2 if output_attentions else 1]
+                else:
+                    next_decoder_cache = past_key_values
 
             if output_attentions:
-                all_self_attns += (layer_outputs[1],)
+                all_self_attns += (layer_outputs[1] if isinstance(layer_outputs, tuple) else None,)
 
         hidden_states = self.norm(hidden_states)
 
@@ -291,7 +323,10 @@ class CambrianQwenModel(CambrianMetaModel, Qwen2Model):
 
         next_cache = None
         if use_cache:
-            next_cache = next_decoder_cache.to_legacy_cache() if use_legacy_cache else next_decoder_cache
+            if isinstance(next_decoder_cache, tuple):
+                next_cache = next_decoder_cache.to_legacy_cache() if use_legacy_cache else next_decoder_cache
+            else:
+                next_cache = past_key_values
 
         if not return_dict:
             return tuple(v for v in [hidden_states, next_cache, all_hidden_states, all_self_attns] if v is not None)
@@ -307,10 +342,16 @@ class CambrianQwenForCausalLM(Qwen2ForCausalLM, CambrianMetaForCausalLM):
     config_class = CambrianQwenConfig
 
     def __init__(self, config):
-        # super(Qwen2ForCausalLM, self).__init__(config)
+        # transformers 5.8: rope_scaling renamed to rope_parameters; set a
+        # default (no-scaling) rope so Qwen2RotaryEmbedding doesn't hit None.
+        config.rope_scaling = None
+        config.rope_parameters = {
+            "rope_type": "default",
+            "scaling_factor": 1.0,
+            "rope_theta": getattr(config, "rope_theta", 1000000),
+        }
         Qwen2ForCausalLM.__init__(self, config)
         config.model_type = "cambrian_qwen"
-        config.rope_scaling = None
 
         self.model = CambrianQwenModel(config)
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)

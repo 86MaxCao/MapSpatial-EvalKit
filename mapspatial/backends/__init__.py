@@ -94,21 +94,9 @@ def _veomni_showo2():
     return ShowO2Backend
 
 
-@register("veomni_mingunivision")
-def _veomni_mingunivision():
-    from .veomni.mingunivision import MingUniVisionBackend
-    return MingUniVisionBackend
-
-
 @register("veomni_joyai")
 def _veomni_joyai():
     from .veomni.joyai import JoyAIBackend
     return JoyAIBackend
-
-
-@register("veomni_internvlu")
-def _veomni_internvlu():
-    from .veomni.internvlu import InternVLUBackend
-    return InternVLUBackend
 
 

@@ -1,19 +1,19 @@
-# MiMo-Embodied-7B via transformers (generic family)
+# MiMo-Embodied-7B via vLLM (Qwen2.5-VL architecture)
 name: MiMo-Embodied-7B
-backend: transformers
+backend: vllm
 model_path: ${CKPT_DIR}/MiMo-Embodied-7B
 
 load:
-  model_family: generic
-  model_class: AutoModelForCausalLM
+  max_model_len: 32768
+  gpu_memory_utilization: 0.7
+  limit_mm_per_prompt:
+    image: 24
+    video: 1
   dtype: bfloat16
   trust_remote_code: true
 
 generate:
   temperature: 0.0
   max_new_tokens: 4096
-
-backend_args:
-  prompt_style: generic
 
 strategies: [direct]

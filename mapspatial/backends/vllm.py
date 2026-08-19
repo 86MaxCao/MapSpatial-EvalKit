@@ -62,8 +62,16 @@ class VllmBackend(Backend):
         self._cfg = cfg
         self._SamplingParams = SamplingParams
 
-        # Determine prompt style from config
-        self._prompt_style = cfg.backend_args.get("prompt_style", "qwen")
+        # Auto-detect model type from name (not a config field). Only
+        # internvl/minicpm need a distinct prompt format (flat <image>
+        # placeholders); everything else uses the unified content-list path.
+        name_lower = cfg.name.lower()
+        if "internvl" in name_lower:
+            self._model_type = "internvl"
+        elif "minicpm" in name_lower:
+            self._model_type = "minicpm"
+        else:
+            self._model_type = "other"
 
     @property
     def model_name(self) -> str:
@@ -157,39 +165,47 @@ class VllmBackend(Backend):
     def _to_vllm_request(self, msg: Message) -> dict:
         """Convert a Message to a vLLM request dict.
 
-        Two styles based on config:
-        - qwen: content list with {"type":"image","image":path} + {"type":"text","text":...}
-        - placeholder: flat string with <image> tokens + multi_modal_data image list
+        Unified path (mirrors outdoor eval/backends.py):
+        - internvl/minicpm: flat "<image>" placeholder text (their chat
+          templates expect inline image tokens, not content-list items).
+        - everything else (Qwen / GLM / Step3 / ...): content list with
+          {"type":"image","image":path} + {"type":"text","text":...}.
+
+        Both branches preload PIL images and pass them in multi_modal_data.
+        Passing path strings is avoided: vLLM's mm-only processor call
+        (call_hf_processor_mm_only) fails for Step3-VL, whose
+        Step3VLProcessor.__call__ requires text+images together — the
+        separate images-only extraction raises IndexError. PIL makes vLLM
+        use the text+images path; safe for all models.
         """
-        if self._prompt_style == "placeholder":
-            prompt_text, image_paths = to_placeholder_prompt(msg)
-            images = [str(p) for p in image_paths]
+        from ..media import load_image
+
+        # Collect images as PIL up front (shared by both branches)
+        images: list = []
+        for item in msg:
+            if item["type"] == "image":
+                v = item["value"]
+                if isinstance(v, str) or isinstance(v, Path):
+                    images.append(load_image(v))
+                else:  # already a PIL Image
+                    images.append(v)
+
+        if self._model_type in ("internvl", "minicpm"):
+            # Flat "<image>" placeholder string; chat template inserts the
+            # model's image token from these inline placeholders.
+            prompt_text, _ = to_placeholder_prompt(msg)
             chat_messages = [{"role": "user", "content": prompt_text}]
-            rendered = self._processor.apply_chat_template(
-                chat_messages, tokenize=False, add_generation_prompt=True
-            )
-            return {
-                "prompt": rendered,
-                "multi_modal_data": {"image": images} if images else {},
-            }
         else:
-            # qwen style
+            # Content list: {"type":"image","image":path} + {"type":"text",...}.
+            # The chat template reads item.type only (not the path value),
+            # so path strings here are fine — PIL goes into multi_modal_data.
             content = to_qwen_content(msg)
             chat_messages = [{"role": "user", "content": content}]
-            rendered = self._processor.apply_chat_template(
-                chat_messages, tokenize=False, add_generation_prompt=True
-            )
-            # Collect image paths/objects for vLLM
-            images = []
-            for item in msg:
-                if item["type"] == "image":
-                    v = item["value"]
-                    if isinstance(v, str) or isinstance(v, Path):
-                        images.append(str(v))
-                    else:
-                        # PIL Image — vLLM can accept PIL directly
-                        images.append(v)
-            return {
-                "prompt": rendered,
-                "multi_modal_data": {"image": images} if images else {},
-            }
+
+        rendered = self._processor.apply_chat_template(
+            chat_messages, tokenize=False, add_generation_prompt=True
+        )
+        return {
+            "prompt": rendered,
+            "multi_modal_data": {"image": images} if images else {},
+        }

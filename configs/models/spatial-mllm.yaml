@@ -1,7 +1,7 @@
 # Spatial-MLLM via spatial_mllm backend (VGGT spatial encoding)
 name: Spatial-MLLM
 backend: spatial_mllm
-model_path: ${CKPT_DIR}/Spatial-MLLM
+model_path: ${CKPT_DIR}/Spatial-MLLM-v1.1-Instruct-820K
 
 load:
   dtype: bfloat16

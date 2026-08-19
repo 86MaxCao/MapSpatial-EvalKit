@@ -56,8 +56,9 @@ class JanusBackend(Backend):
         self._model, _ = load_model(
             model_path, Janus, device=device, dtype=dtype,
         )
-        from transformers import LlamaTokenizerFast
-        self._tokenizer = LlamaTokenizerFast.from_pretrained(model_path, trust_remote_code=True)
+        self._fix_rope_inv_freq()
+        from transformers import PreTrainedTokenizerFast
+        self._tokenizer = PreTrainedTokenizerFast.from_pretrained(model_path)
 
         self._device = device
 
@@ -84,6 +85,32 @@ class JanusBackend(Backend):
     @property
     def model_name(self) -> str:
         return self._cfg.name
+
+    def _fix_rope_inv_freq(self):
+        """Recompute LlamaRotaryEmbedding.inv_freq after loading.
+
+        The init_empty_weights() + to_empty() loading chain zeroes the
+        inv_freq buffer, breaking RoPE entirely → degenerate text generation.
+        Recompute from config.rope_parameters['rope_theta'].
+        """
+        lm = self._model.language_model
+        rope = getattr(lm.model, "rotary_emb", None)
+        if rope is None or not hasattr(rope, "inv_freq"):
+            return
+        # Already correct (non-zero)
+        if rope.inv_freq.abs().sum() > 0:
+            return
+        cfg = lm.config
+        dim = getattr(cfg, "head_dim", None) or cfg.hidden_size // cfg.num_attention_heads
+        base = cfg.rope_parameters.get("rope_theta", 10000.0)
+        device = rope.inv_freq.device
+        dtype = rope.inv_freq.dtype
+        inv_freq = 1.0 / (
+            base ** (torch.arange(0, dim, 2, dtype=torch.float) / dim)
+        )
+        rope.inv_freq = inv_freq.to(device=device, dtype=dtype)
+        if hasattr(rope, "original_inv_freq"):
+            rope.original_inv_freq = inv_freq.clone().to(device=device, dtype=dtype)
 
     def _build_processor(self, model_path: str):
         """Build the JanusProcessor using vendored code (VeOmni convention)."""

@@ -11,6 +11,7 @@ load:
     video: 1
   dtype: bfloat16
   trust_remote_code: true
+  enforce_eager: true
 
 generate:
   temperature: 0.0

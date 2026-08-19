@@ -168,7 +168,7 @@ def load_model(
     # 3. Move to real device and dtype (matching VeOmni: to_empty then to(bf16))
     model = model.to_empty(device=device).to(dt)
 
-    # 4. Load weights — check for custom loader first (Show-o2, InternVL-U, JoyAI use this)
+    # 4. Load weights — check for custom loader first (Show-o2, JoyAI use this)
     if hasattr(model, "load_weights_from_checkpoint"):
         model.load_weights_from_checkpoint(model_path)
     else:
