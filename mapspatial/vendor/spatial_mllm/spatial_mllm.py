@@ -27,17 +27,14 @@ class SpatialMLLMConfig(Qwen2_5_VLConfig):
 class SpatialMLLMForConditionalGeneration(Qwen2_5_VLForConditionalGeneration):
     """Spatial-MLLM: Qwen2.5-VL + VGGT spatial encoder + connector for spatial understanding.
 
-    Strategy for transformers 5.8 compatibility:
-    - Override forward to inject spatial fusion on the first iteration
-    - Let the parent handle all position_ids, attention masks, language model, etc.
+    Uses super().forward() delegation — the parent handles position_ids, attention mask,
+    language model, etc. We only inject spatial fusion on the first iteration.
     """
 
     def __init__(self, config):
         super().__init__(config)
         self.spatial_encoder = VGGTSpatialEncoderPreTrainedModel(config.spatial_config)
         self.connector = get_connector(config)
-
-        # Initialize weights and apply final processing
         self.post_init()
 
     @property

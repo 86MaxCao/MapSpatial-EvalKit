@@ -173,7 +173,7 @@ def extract_answer(
         valid_set = set(valid_letters_str)
     else:
         # Default A-D (our data is all 4-choice, but don't hardcode silently)
-        valid_set = {"A", "B", "C", "D"}
+        valid_set = {"A", "B", "C", "D", "E", "F"}
 
     def _filter_letters(match_str: str) -> str:
         """Filter matched letters to only valid ones."""
@@ -232,7 +232,17 @@ def extract_answer(
     if key:
         return ExtractResult(answer=key, method="option_text", confident=True)
 
-    # 7. Fallback: last valid letter in text
+    # 7. Comma-separated multi-letter at end of response (e.g. "A, C", "A,B")
+    #    Single-choice questions: model outputting multiple answers should be
+    #    judged wrong. Only check the tail to avoid false positives in reasoning.
+    tail = clean_text[-80:].strip()
+    comma_match = re.search(r'([A-F](?:\s*,\s*[A-F])+)', tail)
+    if comma_match:
+        letters = sorted(set(l.strip().upper() for l in comma_match.group(1).split(",") if l.strip() in valid_set))
+        if len(letters) > 1:
+            return ExtractResult(answer=",".join(letters), method="comma_multi", confident=False)
+
+    # 8. Fallback: last valid letter in text
     all_letters = re.findall(r"\b([A-Z])\b", clean_text)
     valid_found = [l for l in all_letters if l.upper() in valid_set]
     if valid_found:

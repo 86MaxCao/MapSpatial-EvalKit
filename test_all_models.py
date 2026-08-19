@@ -728,65 +728,6 @@ def janus_draw():
 
 
 # ════════════════════════════════════════════════════════════════════════
-# InternVL-U (backend abstraction: InternVLUBackend)
-# ════════════════════════════════════════════════════════════════════════
-
-def internvlu_understand():
-    """InternVL-U understand via backend.understand() with float32 attention fix."""
-    from mapspatial.config import load_model_config
-    from mapspatial.backends.registry import get_backend_cls
-
-    cfg = load_model_config("configs/models/internvl-u.yaml")
-    BackendCls = get_backend_cls(cfg.backend)
-    backend = BackendCls(cfg)
-
-    test_img = Image.new("RGB", (512, 512), (200, 200, 200))
-    for prompt in UNDERSTAND_PROMPTS:
-        messages = [[
-            {"type": "image", "value": test_img},
-            {"type": "text", "value": prompt},
-        ]]
-        try:
-            preds = backend.understand(messages, max_new_tokens=256)
-            response = preds[0].text if preds else "(no response)"
-        except Exception as e:
-            response = f"ERROR: {e}"
-        print(f"  Q: {prompt}\n  A: {response}")
-
-    del backend
-    gpu_cleanup()
-
-
-def internvlu_draw():
-    """InternVL-U draw via backend.draw() (diffusion pipeline)."""
-    from mapspatial.config import load_model_config
-    from mapspatial.backends.registry import get_backend_cls
-
-    cfg = load_model_config("configs/models/internvl-u.yaml")
-    BackendCls = get_backend_cls(cfg.backend)
-    backend = BackendCls(cfg)
-
-    for idx, prompt in enumerate(DRAW_PROMPTS, 1):
-        print(f"\n  Prompt {idx}: {prompt[:50]}...")
-        t0 = time.time()
-        try:
-            img = backend.draw(
-                context=[{"type": "text", "value": prompt}],
-                instruction=prompt,
-            )
-            if img is not None:
-                save_image(img, f"internvlu_prompt{idx}")
-                print(f"  Time: {time.time()-t0:.1f}s")
-            else:
-                print(f"  draw() returned None")
-        except Exception as e:
-            import traceback; print(f"  FAILED: {e}"); traceback.print_exc()
-
-    del backend
-    gpu_cleanup()
-
-
-# ════════════════════════════════════════════════════════════════════════
 # Show-o2 (backend abstraction: ShowO2Backend)
 # ════════════════════════════════════════════════════════════════════════
 

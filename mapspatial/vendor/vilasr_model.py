@@ -326,18 +326,41 @@ def _multi_turn_generate(
         if not indices:
             break
 
-        input_prompts = [
-            {
-                "prompt_token_ids": tokenizer.encode(p, add_special_tokens=False)[:],
+        # Build vLLM requests with length guard: skip items whose estimated
+        # input (text tokens + ~1000/image) would exceed max_model_len margin.
+        vllm_requests = []
+        kept_indices = []
+        for p_text, mm_data, idx in zip(input_prompts, multi_modal_data, indices):
+            token_ids = tokenizer.encode(p_text, add_special_tokens=False)
+            n_images = len(mm_data.get("image", []))
+            est_len = len(token_ids) + n_images * 1000
+            if est_len > 30000:  # leave margin below max_model_len=32768
+                samples_info[idx]["stop"] = True
+                samples_info[idx]["finish_reason"] = "length"
+                continue
+            vllm_requests.append({
+                "prompt_token_ids": token_ids,
                 "multi_modal_data": mm_data,
-            }
-            for p, mm_data in zip(input_prompts, multi_modal_data)
-        ]
-        outputs = inference_engine.generate(
-            prompts=input_prompts,
-            sampling_params=sampling_params,
-            use_tqdm=use_tqdm,
-        )
+            })
+            kept_indices.append(idx)
+        indices = kept_indices
+
+        if not vllm_requests:
+            continue
+
+        # Generate with error guard — engine crash shouldn't hang the run
+        try:
+            outputs = inference_engine.generate(
+                prompts=vllm_requests,
+                sampling_params=sampling_params,
+                use_tqdm=use_tqdm,
+            )
+        except Exception as e:
+            for idx in indices:
+                samples_info[idx]["stop"] = True
+                samples_info[idx]["finish_reason"] = "error"
+                samples_info[idx]["response"] += f"\n[engine error: {e}]"
+            break
 
         sorted_outputs = sorted(outputs, key=lambda output: int(output.request_id))
         responses = [x.outputs[0].text for x in sorted_outputs]
@@ -549,6 +572,7 @@ class VilasrModel:
             tensor_parallel_size=torch.cuda.device_count(),
             limit_mm_per_prompt={"image": 62, "video": 10},
             gpu_memory_utilization=gpu_memory_utilization,
+            max_model_len=32768,
             enable_prefix_caching=True,
             enforce_eager=True,
         )

@@ -103,7 +103,11 @@ class CambrianQwenModel(CambrianMetaModel, Qwen2Model):
         if use_cache:
             use_legacy_cache = not isinstance(past_key_values, Cache)
             if use_legacy_cache:
-                past_key_values = DynamicCache.from_legacy_cache(past_key_values)
+                if hasattr(DynamicCache, "from_legacy_cache"):
+                    past_key_values = DynamicCache.from_legacy_cache(past_key_values)
+                else:
+                    # transformers 5.x: from_legacy_cache removed
+                    past_key_values = DynamicCache() if past_key_values is None else past_key_values
             if hasattr(past_key_values, "get_usable_length"):
                 past_key_values_length = past_key_values.get_usable_length(seq_length)
             else:
@@ -199,7 +203,7 @@ class CambrianQwenModel(CambrianMetaModel, Qwen2Model):
                     hidden_states,
                     attention_mask=attention_mask,
                     position_ids=position_ids,
-                    past_key_value=past_key_values,
+                    past_key_values=past_key_values,
                     output_attentions=output_attentions,
                     use_cache=use_cache,
                     position_embeddings=position_embeddings,
@@ -324,7 +328,10 @@ class CambrianQwenModel(CambrianMetaModel, Qwen2Model):
         next_cache = None
         if use_cache:
             if isinstance(next_decoder_cache, tuple):
-                next_cache = next_decoder_cache.to_legacy_cache() if use_legacy_cache else next_decoder_cache
+                if use_legacy_cache and hasattr(next_decoder_cache, "to_legacy_cache"):
+                    next_cache = next_decoder_cache.to_legacy_cache()
+                else:
+                    next_cache = next_decoder_cache
             else:
                 next_cache = past_key_values
 

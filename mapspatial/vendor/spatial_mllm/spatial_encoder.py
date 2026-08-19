@@ -44,6 +44,16 @@ class VGGTSpatialEncoderPreTrainedModel(PreTrainedModel):
             embed_dim=config.embed_dim,
         ).eval()
 
+    def _fix_non_persistent_buffers(self):
+        """Fix non-persistent buffers that get zeroed during from_pretrained loading."""
+        agg = self.vggt_model.aggregator
+        if hasattr(agg, '_resnet_std') and (agg._resnet_std == 0).all():
+            from .vggt.models.aggregator import _RESNET_MEAN, _RESNET_STD
+            device = agg._resnet_mean.device
+            dtype = agg._resnet_mean.dtype
+            agg._resnet_mean = torch.FloatTensor(_RESNET_MEAN).view(1, 1, 3, 1, 1).to(device=device, dtype=dtype)
+            agg._resnet_std = torch.FloatTensor(_RESNET_STD).view(1, 1, 3, 1, 1).to(device=device, dtype=dtype)
+
     def _init_weights(self, module):
         pass
 
@@ -69,12 +79,18 @@ class VGGTSpatialEncoderPreTrainedModel(PreTrainedModel):
             print(f"Warning: Unexpected keys when loading VGGT state dict: {unexpected_keys}")
 
     def preprocess_video_tensors(self, video_tensor: List[torch.Tensor]) -> List[torch.Tensor]:
-        return video_tensor
+        processed = []
+        for v in video_tensor:
+            if v.dim() == 3:  # [C, H, W] -> [1, C, H, W]
+                v = v.unsqueeze(0)
+            processed.append(v)
+        return processed
 
     def forward(self, video_tensor: List[torch.Tensor], **kwargs):
         """
         video_tensor: List of [T_i, C, H_i, W_i].
         """
+        self._fix_non_persistent_buffers()
         group_map = defaultdict(list)
         for original_idx, v in enumerate(video_tensor):
             group_map[v.shape].append((original_idx, v))
