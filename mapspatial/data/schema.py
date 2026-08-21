@@ -58,8 +58,15 @@ def parse_record(record: dict, data_root: Path) -> TaskSample:
     multiple_choice = record.get("multiple_choice")
     options = record.get("options", [])
 
+    # Transform-layer records carry the transform name in `variant`
+    # (e.g. "mirror_h_rot90"); base records have variant=="base". The runner
+    # materializes transformed images from this tag (see media.materialize_transforms).
+    variant_name = record.get("variant", "")
+    layer = record.get("layer", "")
+    transform = variant_name if (layer == "transform" and variant_name and variant_name != "base") else None
+
     message = _build_message(
-        question, image_abs, task_id, question_type, multiple_choice, options
+        question, image_abs, task_id, question_type, multiple_choice, options, transform
     )
 
     gold, gold_text = _gold_from_record(record)
@@ -105,21 +112,27 @@ def _build_message(
     question_type: str,
     multiple_choice: dict | None,
     options: list | None = None,
+    transform: str | None = None,
 ) -> Message:
     """Construct interleaved Message from question + image paths.
 
     Single image (t1/t2/t3/t4-waypoint_ordering): [image, text]
     Multi image (t4 route_validity, 4 images): [text, image, text, image, ...]
+
+    transform is the benchmark transform-variant name (e.g. "mirror_h_rot90")
+    attached to each image item so backends apply it at load time. base/None
+    means identity. This lets the JSONL `images` field point at the base
+    image while the model sees the transformed view (no pre-rendered PNGs).
     """
     if question_type == "route_validity" and len(image_paths) > 1:
         return _build_multi_image_message(
-            question, image_paths, multiple_choice, options or []
+            question, image_paths, multiple_choice, options or [], transform
         )
 
     # Default: image(s) first, then text (image-initial for Bagel compatibility)
     msg: Message = []
     for p in image_paths:
-        msg.append({"type": "image", "value": p})
+        msg.append({"type": "image", "value": p, "transform": transform})
     msg.append({"type": "text", "value": question})
     return msg
 
@@ -129,6 +142,7 @@ def _build_multi_image_message(
     image_paths: list[Path],
     multiple_choice: dict | None,
     options: list,
+    transform: str | None = None,
 ) -> Message:
     """Build interleaved text+image message for T4 route_validity.
 
@@ -154,7 +168,7 @@ def _build_multi_image_message(
     if keys and len(keys) == len(image_paths):
         msg: Message = [{"type": "text", "value": prompt}]
         for i, img in enumerate(image_paths):
-            msg.append({"type": "image", "value": img})
+            msg.append({"type": "image", "value": img, "transform": transform})
             if i < len(keys) - 1:
                 msg.append({"type": "text", "value": f"Option {keys[i + 1]}:"})
         return msg
@@ -162,7 +176,7 @@ def _build_multi_image_message(
     # Fallback: text first, then images
     msg = [{"type": "text", "value": question}]
     for p in image_paths:
-        msg.append({"type": "image", "value": p})
+        msg.append({"type": "image", "value": p, "transform": transform})
     return msg
 
 

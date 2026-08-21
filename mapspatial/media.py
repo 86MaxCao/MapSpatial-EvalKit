@@ -59,6 +59,57 @@ def load_image(src: ImageSource, *, cache: "MediaCache | None" = None) -> Image.
     return Image.open(p).convert("RGB")
 
 
+# Benchmark transform conventions (must match the data generator that flips
+# gold answers in label.json): all rotations are counterclockwise; compound
+# names apply mirror first, then rotation (horizontal_before_rotation).
+_ROT_TRANSPOSE = {90: Image.ROTATE_90, 180: Image.ROTATE_180, 270: Image.ROTATE_270}
+
+
+def apply_transform(img: Image.Image, name: str | None) -> Image.Image:
+    """Apply a benchmark spatial transform to a PIL image by variant name.
+
+    name is the transform layer's variant (e.g. "mirror_h_rot90"). "base"/None
+    is identity. Operations: mirror_h = FLIP_LEFT_RIGHT; rot{90,180,270} =
+    counterclockwise rotation; mirror_h_rot{90,180,270} = mirror then rotate.
+    """
+    if not name or name == "base":
+        return img
+    rest = name
+    if rest.startswith("mirror_h"):
+        img = img.transpose(Image.FLIP_LEFT_RIGHT)
+        rest = rest[len("mirror_h"):].lstrip("_")
+    if rest.startswith("rot"):
+        deg = int(rest[len("rot"):])  # rot90 -> 90
+        img = img.transpose(_ROT_TRANSPOSE[deg])
+    return img
+
+
+def materialize_transforms(
+    messages: "list[list[dict]]", cache: "MediaCache"
+) -> None:
+    """Apply per-item transforms and rewrite image items to temp file paths.
+
+    For each image item carrying a non-base `transform`, load the base image,
+    apply the transform, save to a temp file (via cache), and replace the
+    item's `value` with that path. This makes transformed views visible to
+    ALL backends (vLLM / transformers / API / ...) without any backend
+    awareness: they just load a path. Idempotent — clears `transform` after
+    materializing so re-entry is a no-op.
+    """
+    for msg in messages:
+        for item in msg:
+            if item.get("type") != "image":
+                continue
+            name = item.get("transform")
+            if not name or name == "base":
+                continue
+            src = item["value"]
+            pil = src if isinstance(src, Image.Image) else load_image(src)
+            pil = apply_transform(pil, name)
+            item["value"] = cache.materialize(pil, suffix=".png")
+            item["transform"] = None  # consumed — don't re-apply
+
+
 def sample_frames(video: Path, *, n: int = 16, reader: str = "auto") -> list[Image.Image]:
     """Uniformly sample n frames from a video file.
 

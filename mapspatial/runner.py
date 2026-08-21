@@ -22,6 +22,7 @@ from .config import RunConfig
 from .types import TaskSample, Prediction, RunContext
 from .data.loader import iter_samples
 from .data.preflight import preflight, PreflightReport
+from .media import MediaCache, materialize_transforms
 from .backends.registry import get_backend_cls
 from .strategies import get_strategy
 from .eval.answer import extract_answer, is_correct
@@ -306,12 +307,21 @@ def run(
         for i in range(0, len(pending), batch_size):
             batch = pending[i:i + batch_size]
 
-            try:
-                preds = strategy.run(backend, batch, ctx)
-            except Exception as e:
-                print(f"ERROR: strategy.run failed for batch starting at {i}: {e}",
-                      file=sys.stderr)
-                preds = [Prediction(error=str(e)) for _ in batch]
+            # Apply benchmark transforms (mirror_h/rot90/...) by materializing
+            # transformed images to temp files and rewriting message image
+            # items to point at them. This is backend-agnostic — every backend
+            # just loads a path — so it works for vLLM/transformers/API/...
+            # No-op for base variants (items carry no transform).
+            with MediaCache() as media_cache:
+                materialize_transforms(
+                    [s.message for s in batch], media_cache
+                )
+                try:
+                    preds = strategy.run(backend, batch, ctx)
+                except Exception as e:
+                    print(f"ERROR: strategy.run failed for batch starting at {i}: {e}",
+                          file=sys.stderr)
+                    preds = [Prediction(error=str(e)) for _ in batch]
 
             for sample, pred in zip(batch, preds):
                 record = build_result_record(
