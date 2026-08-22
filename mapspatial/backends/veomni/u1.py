@@ -265,18 +265,24 @@ class U1Backend(Backend):
 
         # Model stays in bfloat16 — vendored code handles float32 conversion
         # internally in _t2i_predict_v and the denoising loop
-        with torch.inference_mode():
-            output = self._model.it2i_generate(
-                tokenizer=self._tokenizer,
-                prompt=full_prompt,
-                images=pil_images if pil_images else None,
-                image_size=image_size,
-                cfg_scale=cfg_scale,
-                img_cfg_scale=1.0,
-                num_steps=num_steps,
-                seed=seed,
-                think_mode=self._think_mode,
-            )
+        import sys, traceback as _tb
+        try:
+            with torch.inference_mode():
+                output = self._model.it2i_generate(
+                    tokenizer=self._tokenizer,
+                    prompt=full_prompt,
+                    images=pil_images if pil_images else None,
+                    image_size=image_size,
+                    cfg_scale=cfg_scale,
+                    img_cfg_scale=1.0,
+                    num_steps=num_steps,
+                    seed=seed,
+                    think_mode=self._think_mode,
+                )
+        except Exception as e:
+            _tb_str = ''.join(_tb.format_tb(e.__traceback__))
+            print(f"[U1 draw ERROR] {e}\n{_tb_str}", file=sys.stderr, flush=True)
+            raise
 
         if isinstance(output, torch.Tensor):
             image_tensor = output.clamp(-1, 1) * 0.5 + 0.5
