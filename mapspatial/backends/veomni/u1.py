@@ -106,12 +106,15 @@ class U1Backend(Backend):
 
     def understand(self, messages: list[Message], **gen_kw) -> list[Prediction]:
         """Vision understanding aligned with official examples/vqa/inference.py."""
+        import sys, traceback as _tb
         results: list[Prediction] = []
         for msg in messages:
             try:
                 text = self._understand_one(msg, gen_kw)
                 results.append(Prediction(text=text))
             except Exception as e:
+                _tb_str = ''.join(_tb.format_tb(e.__traceback__))
+                print(f"[U1 understand ERROR] {e}\n{_tb_str}", file=sys.stderr, flush=True)
                 results.append(Prediction(error=str(e)))
         return results
 
@@ -190,14 +193,12 @@ class U1Backend(Backend):
         embed_tokens = model.language_model.model.embed_tokens
         lm_head = model.language_model.lm_head
         # nn.Embedding lookup doesn't support bfloat16 in aten::embedding;
-        # temporarily cast weight to float32, then cast result back
+        # keep weight in float32 for entire function (including greedy decode loop)
         _orig_w = embed_tokens.weight.data
         if _orig_w.dtype == torch.bfloat16:
             embed_tokens.weight.data = _orig_w.float()
         inputs_embeds = embed_tokens(input_ids[0])  # [T, D]
-        if _orig_w.dtype == torch.bfloat16:
-            embed_tokens.weight.data = _orig_w
-            inputs_embeds = inputs_embeds.to(_orig_w.dtype)
+        # Don't cast back yet — greedy loop below also calls embed_tokens()
         if pixel_values is not None:
             with torch.inference_mode():
                 vit_embeds = model.extract_feature(
@@ -235,6 +236,10 @@ class U1Backend(Backend):
                     [[new_t], [0], [0]], device=device, dtype=torch.long
                 )  # [3, 1]
                 indexes = torch.cat([indexes, new_idx], dim=1)
+
+        # Restore embedding weight to original dtype
+        if _orig_w.dtype == torch.bfloat16:
+            embed_tokens.weight.data = _orig_w
 
         return tokenizer.decode(generated, skip_special_tokens=True).strip()
 
