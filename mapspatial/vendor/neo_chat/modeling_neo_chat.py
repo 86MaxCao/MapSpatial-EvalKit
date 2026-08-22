@@ -1725,17 +1725,21 @@ class NEOChatModel(PreTrainedModel):
             use_cache=True,
         )
 
+        # Cast LLM output to float32 for fm_head (some ops don't support bfloat16)
+        hidden = outputs.last_hidden_state[:, -image_token_num:].view(B, L, -1).float()
+        t_float = t.float() if not t.is_floating_point() or t.dtype != torch.float32 else t
+
         if self.use_deep_fm_head:
             x_pred = self.fm_modules["fm_head"](
-                outputs.last_hidden_state[:, -image_token_num:].view(B * L, -1), t.repeat(B * L)
+                hidden, t_float.repeat(B * L)
             ).view(B, L, -1)
         else:
             x_pred = self.fm_modules["fm_head"](
-                outputs.last_hidden_state[:, -image_token_num:].view(B, L, -1)
+                hidden
             ).view(B, L, -1)
 
-        v_pred = (x_pred - z) / (1 - t).clamp_min(self.t_eps)
-        return v_pred
+        v_pred = (x_pred - z.float()) / (1 - t_float).clamp_min(self.t_eps)
+        return v_pred.to(z.dtype)
 
     @torch.no_grad()
     def it2i_generate(
@@ -1926,9 +1930,9 @@ class NEOChatModel(PreTrainedModel):
             image_input = self.patchify(image_prediction, self.patch_size, channel_first=True)
             image_embeds = self.extract_feature(
                 image_input.view(batch_size * grid_h * grid_w, -1), gen_model=True, grid_hw=gen_grid_hw
-            ).view(batch_size, img_tokens, -1)
+            ).view(batch_size, img_tokens, -1).float()
             t_expanded = t.expand(batch_size * img_tokens)
-            timestep_embeddings = self.fm_modules["timestep_embedder"](t_expanded).view(batch_size, img_tokens, -1)
+            timestep_embeddings = self.fm_modules["timestep_embedder"](t_expanded).view(batch_size, img_tokens, -1).float()
             if self.add_noise_scale_embedding:
                 ns_tensor = torch.full_like(t_expanded, noise_scale / self.noise_scale_max_value)
                 noise_emb = self.fm_modules["noise_scale_embedder"](ns_tensor).view(batch_size, img_tokens, -1)

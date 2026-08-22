@@ -263,21 +263,20 @@ class U1Backend(Backend):
         num_steps = kw.get("num_steps", self._num_steps)
         seed = kw.get("seed", self._seed)
 
-        # Use autocast: keep bfloat16 for flash attention, auto-upcast to
-        # float32 for ops that don't support bfloat16 (VAE conv, etc.)
+        # Model stays in bfloat16 — vendored code handles float32 conversion
+        # internally in _t2i_predict_v and the denoising loop
         with torch.inference_mode():
-            with torch.autocast(device_type="cuda", dtype=torch.float32):
-                output = self._model.it2i_generate(
-                    tokenizer=self._tokenizer,
-                    prompt=full_prompt,
-                    images=pil_images if pil_images else None,
-                    image_size=image_size,
-                    cfg_scale=cfg_scale,
-                    img_cfg_scale=1.0,
-                    num_steps=num_steps,
-                    seed=seed,
-                    think_mode=self._think_mode,
-                )
+            output = self._model.it2i_generate(
+                tokenizer=self._tokenizer,
+                prompt=full_prompt,
+                images=pil_images if pil_images else None,
+                image_size=image_size,
+                cfg_scale=cfg_scale,
+                img_cfg_scale=1.0,
+                num_steps=num_steps,
+                seed=seed,
+                think_mode=self._think_mode,
+            )
 
         if isinstance(output, torch.Tensor):
             image_tensor = output.clamp(-1, 1) * 0.5 + 0.5
