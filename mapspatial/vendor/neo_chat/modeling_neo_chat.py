@@ -1969,11 +1969,15 @@ class NEOChatModel(PreTrainedModel):
             elif img_cfg_scale == 1:
                 # Text CFG only: use full uncondition (past_kv_uncond)
                 # NOT past_kv_img_cond which is None when img_cfg_scale==1
-                out_uncond_v = self._t2i_predict_v(
-                    image_embeds, indexes_image_uncond, past_kv_uncond, t, z,
-                    image_token_num=img_tokens, image_size=image_size,
-                )
-                v_pred = out_uncond_v + cfg_scale * (out_cond - out_uncond_v)
+                if indexes_image_uncond is not None and past_kv_uncond is not None:
+                    out_uncond_v = self._t2i_predict_v(
+                        image_embeds, indexes_image_uncond, past_kv_uncond, t, z,
+                        image_token_num=img_tokens, image_size=image_size,
+                    )
+                    v_pred = out_uncond_v + cfg_scale * (out_cond - out_uncond_v)
+                else:
+                    # Fallback: skip CFG if uncondition cache unavailable
+                    v_pred = out_cond
             elif cfg_scale == img_cfg_scale:
                 out_uncond = self._t2i_predict_v(
                     image_embeds, indexes_image_uncond, past_kv_uncond, t, z,
