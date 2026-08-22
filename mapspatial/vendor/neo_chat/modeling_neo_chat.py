@@ -1870,6 +1870,14 @@ class NEOChatModel(PreTrainedModel):
         device = hidden_cond.device
         dtype = hidden_cond.dtype
 
+        # Cast non-ViT fm_modules to float32 (some ops don't support bfloat16)
+        # Keep vision_model_mot_gen in bfloat16 (handles it internally)
+        _orig_fm_dtypes = {}
+        for _name, _module in self.fm_modules.items():
+            if _name != "vision_model_mot_gen":
+                _orig_fm_dtypes[_name] = next(_module.parameters()).dtype
+                _module.float()
+
         del pixel_values, grid_hw
         del input_embeds_condition, indexes_condition, attn_mask_condition
         if input_embeds_img_cond is not None:
@@ -1993,5 +2001,10 @@ class NEOChatModel(PreTrainedModel):
             clear_flash_kv_cache(past_kv_img_cond)
         if past_kv_uncond is not None:
             clear_flash_kv_cache(past_kv_uncond)
+
+        # Restore fm_modules to original dtype
+        for _name, _dt in _orig_fm_dtypes.items():
+            if _dt != torch.float32:
+                self.fm_modules[_name].to(_dt)
 
         return image_prediction
