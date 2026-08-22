@@ -263,10 +263,13 @@ class U1Backend(Backend):
         num_steps = kw.get("num_steps", self._num_steps)
         seed = kw.get("seed", self._seed)
 
-        # Cast model to float32 for generation (bfloat16 unsupported by some ops)
-        orig_dtype = next(self._model.parameters()).dtype
-        if orig_dtype == torch.bfloat16:
-            self._model.float()
+        # Cast generation modules to float32 (VAE/conv don't support bfloat16)
+        # Keep language_model in bfloat16 (flash attention needs it)
+        casted_modules = []
+        if hasattr(self._model, 'fm_modules'):
+            for name, module in self._model.fm_modules.items():
+                module.float()
+                casted_modules.append(name)
 
         try:
             with torch.inference_mode():
@@ -282,9 +285,10 @@ class U1Backend(Backend):
                     think_mode=self._think_mode,
                 )
         finally:
-            # Restore original dtype
-            if orig_dtype == torch.bfloat16:
-                self._model.to(orig_dtype)
+            # Restore fm_modules to bfloat16
+            orig_dtype = next(self._model.language_model.parameters()).dtype
+            for name in casted_modules:
+                getattr(self._model.fm_modules, name).to(orig_dtype)
 
         if isinstance(output, torch.Tensor):
             image_tensor = output.clamp(-1, 1) * 0.5 + 0.5
