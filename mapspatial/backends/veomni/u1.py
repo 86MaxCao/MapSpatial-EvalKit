@@ -298,7 +298,9 @@ class U1Backend(Backend):
                 )
         except Exception as e:
             _tb_str = ''.join(_tb.format_tb(e.__traceback__))
-            print(f"[U1 draw ERROR] {e}\n{_tb_str}", file=sys.stderr, flush=True)
+            with open("/tmp/u1_error.txt", "w") as f:
+                f.write(f"[U1 DRAW ERROR] {e}\n{_tb_str}\n")
+            print(f"[U1 draw ERROR] {e}", file=sys.stderr, flush=True)
             raise
 
         if isinstance(output, torch.Tensor):
