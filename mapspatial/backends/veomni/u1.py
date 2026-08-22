@@ -197,8 +197,12 @@ class U1Backend(Backend):
         _orig_w = embed_tokens.weight.data
         if _orig_w.dtype == torch.bfloat16:
             embed_tokens.weight.data = _orig_w.float()
-        inputs_embeds = embed_tokens(input_ids[0])  # [T, D]
-        # Don't cast back yet — greedy loop below also calls embed_tokens()
+        inputs_embeds = embed_tokens(input_ids[0])  # [T, D] — float32 from float32 weight
+        # Cast to model dtype (bfloat16) for LLM — embedding lookup needs float32 weight,
+        # but LLM layers expect bfloat16
+        _model_dtype = next(model.parameters()).dtype
+        inputs_embeds = inputs_embeds.to(_model_dtype)
+        # Don't cast weight back yet — greedy loop below also calls embed_tokens()
         if pixel_values is not None:
             with torch.inference_mode():
                 vit_embeds = model.extract_feature(
@@ -229,7 +233,7 @@ class U1Backend(Backend):
                 generated.append(next_id)
                 next_embed = embed_tokens(
                     torch.tensor([[next_id]], device=device)
-                )  # [1, 1, D]
+                ).to(cur_embeds.dtype)  # [1, 1, D] — cast to bfloat16 for LLM
                 cur_embeds = torch.cat([cur_embeds, next_embed], dim=1)
                 new_t = int(indexes[0].max().item()) + 1
                 new_idx = torch.tensor(
