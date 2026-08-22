@@ -189,7 +189,15 @@ class U1Backend(Backend):
         # ── Embed tokens + inject ViT features at <IMG_CONTEXT> ─────────
         embed_tokens = model.language_model.model.embed_tokens
         lm_head = model.language_model.lm_head
+        # nn.Embedding lookup doesn't support bfloat16 in aten::embedding;
+        # temporarily cast weight to float32, then cast result back
+        _orig_w = embed_tokens.weight.data
+        if _orig_w.dtype == torch.bfloat16:
+            embed_tokens.weight.data = _orig_w.float()
         inputs_embeds = embed_tokens(input_ids[0])  # [T, D]
+        if _orig_w.dtype == torch.bfloat16:
+            embed_tokens.weight.data = _orig_w
+            inputs_embeds = inputs_embeds.to(_orig_w.dtype)
         if pixel_values is not None:
             with torch.inference_mode():
                 vit_embeds = model.extract_feature(
