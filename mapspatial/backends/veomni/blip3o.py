@@ -213,11 +213,17 @@ class BLIP3oBackend(Backend):
         import torch
         from PIL import Image
 
-        # Build the prompt from context + instruction
+        # Build the prompt from context + instruction — extract text AND images
         input_list = to_interleave_list(context)
         text_parts = [item for item in input_list if isinstance(item, str)]
+        context_images = [item for item in input_list if not isinstance(item, str)]
         context_text = "\n".join(text_parts)
         full_prompt = f"{context_text}\n{instruction}" if context_text else instruction
+
+        # NOTE: BLIP3o's generation pipeline (LLM → DiT → VAE) does not
+        # natively support image conditioning. Context images are extracted
+        # here for future I2I support, but current generation is
+        # text-conditioned only.
 
         # Tokenize prompt
         prompt_ids = self._tokenizer(

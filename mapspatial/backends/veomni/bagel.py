@@ -259,9 +259,12 @@ class BagelBackend(Backend):
         return response
 
     def draw(self, context: Message, instruction: str, **kw) -> "Image.Image":
-        """Generate an intermediate image using model.generate_image().
+        """Generate an intermediate image using forced interleave.
 
-        Uses the context (original images + instruction) as conditioning.
+        Uses forced_interleave_inference() which unconditionally generates
+        an image after text reasoning, without requiring the model to emit
+        a marker token. This is needed because base Bagel was not trained
+        to emit <image_start>.
         """
         import torch
         from PIL import Image
@@ -273,12 +276,10 @@ class BagelBackend(Backend):
         # Append the draw instruction
         input_list.append(instruction)
 
-        # Run interleave with understanding_output=False but max_rounds=1
-        # This generates one image then stops
-        output = inferencer.interleave_inference(
+        # Use forced_interleave_inference — no marker check, always generates
+        output = inferencer.forced_interleave_inference(
             input_lists=input_list,
             think=True,
-            understanding_output=False,
             max_think_token_n=500,
             do_sample=False,
             text_temperature=self._temperature,
@@ -298,7 +299,6 @@ class BagelBackend(Backend):
             if isinstance(item, Image.Image):
                 return item
 
-        # If no image was generated, raise
         raise RuntimeError("draw() did not produce an image")
 
     def interleave(

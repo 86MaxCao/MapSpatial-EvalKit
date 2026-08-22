@@ -127,16 +127,26 @@ def build_result_record(
 
 
 def _infer_track(strategy: str, meta: dict) -> str:
-    """Provide a protocol label while remaining compatible with old JSONL."""
+    """Provide a protocol label while remaining compatible with old JSONL.
+
+    Track mapping:
+      direct + non-direct condition → O (oracle)
+      direct                      → U (understanding only)
+      external_draw               → C-R (restart generation-to-understanding)
+      forced_interleave           → C-F (stateful forced G2U)
+      native_interleave           → C-A (stateful autonomous G2U)
+    """
     condition = meta.get("evidence_condition", "direct")
     if strategy == "direct" and condition != "direct":
         return "O"
     if strategy == "direct":
         return "U"
-    if strategy == "native_interleave":
-        return "C"
     if strategy == "external_draw":
-        return "G"
+        return "C-R"
+    if strategy == "forced_interleave":
+        return "C-F"
+    if strategy == "native_interleave":
+        return "C-A"
     return ""
 
 
@@ -205,11 +215,14 @@ def run(
     strategy = get_strategy(strategy_name)
     strategy.validate(backend)
 
-    # Build run context
+    # Build run context — populate marker/max_rounds from backend_args
     gen_kw = cfg.model.generate
+    ba = cfg.model.backend_args or {}
     ctx = RunContext(
         output_dir=cfg.output_dir,
         gen_kw=gen_kw,
+        max_rounds=ba.get("max_rounds", 3),
+        marker=ba.get("marker", "<image_start>"),
         view="", task="", variant="",
         save_generated=not cfg.no_save_generated,
     )

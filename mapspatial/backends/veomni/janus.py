@@ -177,12 +177,14 @@ class JanusBackend(Backend):
 
         if processor is not None and images:
             # VeOmni convention: use JanusProcessor
+            # Build conversation with one <image_placeholder> per image
+            image_placeholders = "<image_placeholder>\n" * len(images)
             conversation = [
-                {"role": "User", "content": f"<image_placeholder>\n{prompt}"},
+                {"role": "User", "content": f"{image_placeholders}{prompt}"},
                 {"role": "Assistant", "content": ""},
             ]
             chat_text = processor.apply_chat_template(conversation, task="und")
-            inputs = processor(prompt=chat_text, images=[images[0]])
+            inputs = processor(prompt=chat_text, images=images)
             inputs = {
                 k: v.to(device) if torch.is_tensor(v) else v
                 for k, v in inputs.items()
@@ -233,30 +235,25 @@ class JanusBackend(Backend):
     def draw(self, context: Message, instruction: str, **kw):
         """Generate an image via autoregressive image token sampling + VQ-VAE decode.
 
-        Flow:
-          1. Build prompt from context + instruction
-          2. Tokenize prompt → input_ids
-          3. Append image token start marker
-          4. AR loop over 576 image tokens:
-             a. model.language_model.model(inputs_embeds, use_cache=True,
-                past_key_values=...) → hidden_states
-             b. model.gen_head(hidden_states[:, -1, :]) → logits
-             c. Apply CFG (classifier-free guidance)
-             d. Sample next token
-             e. model.prepare_gen_img_embeds(next_token) → next embed
-          5. model.gen_vision_model.decode_code(generated_tokens,
-              shape=[B, 8, H/16, W/16]) → image tensor
-          6. Convert to PIL Image
+        If context images are present, preprocesses them into the LLM
+        embedding space before the image generation start token, enabling
+        image-conditioned generation (I2I). Otherwise does text-to-image (T2I).
         """
         import torch
         import torch.nn.functional as F
         from PIL import Image
 
-        # Build prompt from context + instruction
+        # Extract text and images from context
         text_parts = []
+        context_images = []
         for item in context:
             if item["type"] == "text":
                 text_parts.append(item["value"])
+            elif item["type"] == "image":
+                v = item["value"]
+                if isinstance(v, (Path, str)):
+                    v = load_image(v)
+                context_images.append(v)
 
         context_text = "\n".join(text_parts)
         full_prompt = f"{context_text}\n{instruction}" if context_text else instruction
@@ -278,6 +275,29 @@ class JanusBackend(Backend):
         # Prepare text embeddings
         embed_layer = self._model.get_input_embeddings()
         text_embeds = embed_layer(input_ids)  # [1, T_text, D]
+
+        # If context images available, encode them and prepend to text embeds
+        if context_images and self._processor is not None:
+            # Use JanusProcessor to encode images into embedding space
+            image_placeholders = "<image_placeholder>\n" * len(context_images)
+            conversation = [
+                {"role": "User", "content": f"{image_placeholders}{context_text}\n{instruction}"},
+                {"role": "Assistant", "content": ""},
+            ]
+            chat_text = self._processor.apply_chat_template(conversation, task="und")
+            inputs = self._processor(prompt=chat_text, images=context_images)
+            inputs = {
+                k: v.to(self._device) if torch.is_tensor(v) else v
+                for k, v in inputs.items()
+            }
+            with torch.no_grad():
+                context_embeds = self._model.prepare_inputs_embeds(
+                    input_ids=inputs["input_ids"],
+                    pixel_values=inputs["pixel_values"],
+                    image_mask=inputs["image_mask"],
+                )
+            # Use the context-conditioned embeds instead of text-only embeds
+            text_embeds = context_embeds
 
         # Draw params (overridable via kw)
         cfg_scale = kw.get("cfg_scale", self._cfg_scale)

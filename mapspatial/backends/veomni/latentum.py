@@ -103,7 +103,12 @@ class LatentUMBackend(Backend):
         return results
 
     def _understand_one(self, msg: Message, gen_kw: dict) -> str:
-        """Call model.answer() — official image preprocessing + generation."""
+        """Call model.answer() — official image preprocessing + generation.
+
+        Handles multiple images: when more than one image is present (e.g.
+        external_draw restart with original map + generated image), all
+        images are passed to internvl.chat() with <image> placeholders.
+        """
         input_list = to_interleave_list(msg)
         text_parts = [item for item in input_list if isinstance(item, str)]
         images = [item for item in input_list if not isinstance(item, str)]
@@ -114,15 +119,38 @@ class LatentUMBackend(Backend):
         temperature = gen_kw.get("temperature", self._temperature)
 
         if images:
-            # Official answer(): load_image (448×448 + ImageNet norm) +
-            # internvl.chat (extract_feature + <IMG_CONTEXT> + generate)
-            response = self._model.answer(
-                images[0],
-                prompt,
-                max_new_tokens=max_new_tokens,
-                do_sample=do_sample,
-                temperature=temperature,
-            )
+            if len(images) == 1:
+                # Single image — use official answer() directly
+                response = self._model.answer(
+                    images[0],
+                    prompt,
+                    max_new_tokens=max_new_tokens,
+                    do_sample=do_sample,
+                    temperature=temperature,
+                )
+            else:
+                # Multiple images — call internvl.chat() directly
+                from model.latentum.image_utils import load_image as _load_img
+                pv_list = []
+                for img in images:
+                    pv = _load_img(img, mode="RGB", max_num_patches=1)
+                    pv_list.append(pv)
+                pixel_values = torch.cat(pv_list, dim=0).to(
+                    self._device, dtype=next(self._model.internvl.parameters()).dtype,
+                )
+                # Prepend <image> placeholder for each image
+                question = ("<image>\n" * len(images)) + prompt
+                generation_config = {
+                    "max_new_tokens": max_new_tokens,
+                    "do_sample": do_sample,
+                    "temperature": temperature,
+                }
+                response = self._model.internvl.chat(
+                    self._model.tokenizer,
+                    pixel_values,
+                    question,
+                    generation_config,
+                )
         else:
             # Text-only: use internvl.chat without pixel_values
             generation_config = {
@@ -144,26 +172,51 @@ class LatentUMBackend(Backend):
     # ------------------------------------------------------------------
 
     def draw(self, context: Message, instruction: str, **kw):
-        """Generate an image via official model.generate_latents + decoder."""
+        """Generate an image via official model.generate_latents + decoder.
+
+        If context images are present, uses generate_latents_with_images()
+        for image-conditioned generation (I2I). Otherwise falls back to
+        text-only generate_latents() (T2I).
+        """
         text_parts = []
+        context_images = []
         for item in context:
             if item["type"] == "text":
                 text_parts.append(item["value"])
+            elif item["type"] == "image":
+                v = item["value"]
+                if isinstance(v, (Path, str)):
+                    from ...media import load_image as _load_pil
+                    v = _load_pil(v)
+                context_images.append(v)
 
         context_text = "\n".join(text_parts)
         full_prompt = f"{context_text}\n{instruction}" if context_text else instruction
 
         cfg_scale = kw.get("cfg_scale", self._cfg_scale)
         temperature = kw.get("temperature", self._draw_temperature)
+        seed = kw.get("seed", 42)
 
         with torch.no_grad():
-            latents = self._model.generate_latents(
-                full_prompt,
-                num_images_per_prompt=1,
-                cfg_scale=cfg_scale,
-                temperature=temperature,
-                seed=kw.get("seed", 42),
-            )
+            if context_images and hasattr(self._model, 'generate_latents_with_images'):
+                # Image-conditioned generation (I2I)
+                latents = self._model.generate_latents_with_images(
+                    context_images,
+                    full_prompt,
+                    num_images_per_prompt=1,
+                    cfg_scale=cfg_scale,
+                    temperature=temperature,
+                    seed=seed,
+                )
+            else:
+                # Text-only generation (T2I) — no context images
+                latents = self._model.generate_latents(
+                    full_prompt,
+                    num_images_per_prompt=1,
+                    cfg_scale=cfg_scale,
+                    temperature=temperature,
+                    seed=seed,
+                )
 
         # Decode latents to image using external decoder if available
         decoder_path = self._cfg.backend_args.get("decoder_path", "")

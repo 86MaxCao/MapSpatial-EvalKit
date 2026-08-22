@@ -74,7 +74,7 @@ class ExternalDrawStrategy(Strategy):
         # Save with sample_id in filename (not uuid8!)
         img_path = None
         if ctx.save_generated and img is not None:
-            gen_dir = ctx.output_dir / "generated" / ctx.view / ctx.task / ctx.variant
+            gen_dir = ctx.output_dir / backend.model_name / self.name / "generated" / ctx.view / ctx.task / ctx.variant
             gen_dir.mkdir(parents=True, exist_ok=True)
             img_path = gen_dir / f"{sample.id}_r0.png"
             img.save(str(img_path))

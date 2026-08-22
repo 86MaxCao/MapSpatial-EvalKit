@@ -45,7 +45,7 @@ class ForcedInterleaveStrategy(Strategy):
                 # Save generated PIL images to disk as Paths
                 saved_paths: list[Path] = []
                 if ctx.save_generated and pred.generated_images:
-                    gen_dir = ctx.output_dir / "generated" / ctx.view / ctx.task / ctx.variant
+                    gen_dir = ctx.output_dir / backend.model_name / self.name / "generated" / ctx.view / ctx.task / ctx.variant
                     gen_dir.mkdir(parents=True, exist_ok=True)
                     for i, img in enumerate(pred.generated_images):
                         if isinstance(img, Path):

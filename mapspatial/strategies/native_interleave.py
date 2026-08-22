@@ -15,6 +15,7 @@ draw_triggered must be recorded to distinguish:
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from .base import Strategy
@@ -42,13 +43,35 @@ class NativeInterleaveStrategy(Strategy):
                     marker=ctx.marker,
                     **ctx.gen_kw,
                 )
+
+                # Save generated PIL images to disk as Paths
+                saved_paths: list[Path] = []
+                if ctx.save_generated and pred.generated_images:
+                    gen_dir = ctx.output_dir / backend.model_name / self.name / "generated" / ctx.view / ctx.task / ctx.variant
+                    gen_dir.mkdir(parents=True, exist_ok=True)
+                    for i, img in enumerate(pred.generated_images):
+                        if isinstance(img, Path):
+                            saved_paths.append(img)
+                        else:
+                            # PIL Image — save to disk
+                            img_path = gen_dir / f"{s.id}_r{i}.png"
+                            img.save(str(img_path))
+                            saved_paths.append(img_path)
+                pred.generated_images = saved_paths
+
+                # Update trace image paths to match saved files
+                if saved_paths:
+                    img_idx = 0
+                    for t in pred.trace:
+                        if t.kind == "image" and t.image is None and img_idx < len(saved_paths):
+                            t.image = saved_paths[img_idx]
+                            img_idx += 1
+
                 # Ensure meta is set
                 pred.meta.setdefault("strategy", "native_interleave")
                 pred.meta.setdefault("backend", backend.model_name)
-                pred.meta.setdefault("draw_triggered",
-                                     len(pred.generated_images) > 0)
-                pred.meta.setdefault("rounds",
-                                     len([t for t in pred.trace if t.kind == "image"]))
+                pred.meta.setdefault("draw_triggered", len(saved_paths) > 0)
+                pred.meta.setdefault("rounds", len(saved_paths))
                 results.append(pred)
             except Exception as e:
                 results.append(Prediction(

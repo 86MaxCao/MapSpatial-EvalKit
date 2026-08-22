@@ -197,32 +197,34 @@ class ShowO2Backend(Backend):
 
         with torch.no_grad():
             if images and self._vae is not None:
-                # Preprocess image: resize 432, center crop, normalize [0.5,0.5,0.5]
-                # 432x432 is the official fixed resolution: VAE 432/8=54, PatchEmbed 54/2=27 → 27*27=729 tokens
-                img = images[0]
-                if img.mode != "RGB":
-                    img = img.convert("RGB")
-                img_t = T.Compose([
-                    T.Resize(432, interpolation=T.InterpolationMode.BICUBIC),
-                    T.CenterCrop(432),
-                    T.ToTensor(),
-                    T.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5]),
-                ])(img).to(device, dtype=next(inner.parameters()).dtype)
+                # Preprocess each image and build concatenated image embeds
+                all_image_embeds = []
+                for img in images:
+                    if img.mode != "RGB":
+                        img = img.convert("RGB")
+                    img_t = T.Compose([
+                        T.Resize(432, interpolation=T.InterpolationMode.BICUBIC),
+                        T.CenterCrop(432),
+                        T.ToTensor(),
+                        T.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5]),
+                    ])(img).to(device, dtype=next(inner.parameters()).dtype)
 
-                # VAE encode: (1, C, 1, H, W) → latents
-                model_dtype = next(inner.parameters()).dtype
-                image_latents = self._vae.sample(
-                    img_t.unsqueeze(0).unsqueeze(2)
-                ).squeeze(2).to(model_dtype)
+                    image_latents = self._vae.sample(
+                        img_t.unsqueeze(0).unsqueeze(2)
+                    ).squeeze(2).to(model_dtype)
 
-                # Image embedding pipeline
-                img_embeds_und = inner.image_embedder_und(image_latents)
-                img_embeds_gen = inner.image_embedder_gen(image_latents)
-                img_embeds_und = img_embeds_und + inner.position_embedding(inner.image_position_ids)
-                img_embeds_und = inner.und_trans(img_embeds_und)["last_hidden_state"]
-                image_embeds = inner.fusion_proj(torch.cat([img_embeds_und, img_embeds_gen], dim=-1))
+                    img_embeds_und = inner.image_embedder_und(image_latents)
+                    img_embeds_gen = inner.image_embedder_gen(image_latents)
+                    img_embeds_und = img_embeds_und + inner.position_embedding(inner.image_position_ids)
+                    img_embeds_und = inner.und_trans(img_embeds_und)["last_hidden_state"]
+                    img_embeds = inner.fusion_proj(torch.cat([img_embeds_und, img_embeds_gen], dim=-1))
+                    all_image_embeds.append(img_embeds)
 
-                # Time embedding
+                # Concatenate all image embeddings
+                image_embeds = torch.cat(all_image_embeds, dim=1)
+                total_img_tokens = image_embeds.shape[1]
+
+                # Time embedding (shared)
                 time_embeds = None
                 if add_time_embeds:
                     time_embeds = inner.time_embed(
@@ -231,7 +233,7 @@ class ShowO2Backend(Backend):
                     if hasattr(inner, "time_embed_proj"):
                         time_embeds = inner.time_embed_proj(time_embeds)
 
-                # Concatenate: [sys] + [boi] + [time_embed] + [image_embeds] + [eoi+question+assistant]
+                # Concatenate: [sys] + [boi] + [time_embed] + [all_image_embeds] + [eoi+question+assistant]
                 if time_embeds is not None:
                     input_embeds = torch.cat([
                         text_embeds_a,
@@ -241,7 +243,7 @@ class ShowO2Backend(Backend):
                         text_embeds_b[:, 1:],    # eoi + question + assistant
                     ], dim=1)
                     modality_positions = torch.tensor(
-                        [text_tokens_a_t.shape[1] + 2, num_mmu_tokens]
+                        [text_tokens_a_t.shape[1] + 2, total_img_tokens]
                     )[None, None, :].to(device)
                 else:
                     input_embeds = torch.cat([
@@ -251,7 +253,7 @@ class ShowO2Backend(Backend):
                         text_embeds_b[:, 1:],    # eoi + question + assistant
                     ], dim=1)
                     modality_positions = torch.tensor(
-                        [text_tokens_a_t.shape[1] + 1, num_mmu_tokens]
+                        [text_tokens_a_t.shape[1] + 1, total_img_tokens]
                     )[None, None, :].to(device)
             else:
                 # No image — text only
@@ -328,12 +330,17 @@ class ShowO2Backend(Backend):
         max_seq_len = 1024
         max_text_len = max_seq_len - num_t2i_image_tokens - 4  # 290
 
-        # Build prompt
+        # Build prompt — extract text AND images from context
         input_list = to_interleave_list(context)
         text_parts = [item for item in input_list if isinstance(item, str)]
+        context_images = [item for item in input_list if not isinstance(item, str)]
         context_text = "\n".join(text_parts)
         prompt = f"{context_text}\n{instruction}" if context_text else instruction
         prompts = [prompt]
+
+        # NOTE: Show-o2's t2i_generate does not natively support image
+        # conditioning. Context images are extracted here for future I2I
+        # support, but current generation is text-conditioned only.
 
         # Generation parameters
         guidance_scale = kw.get("guidance_scale", self._guidance_scale)

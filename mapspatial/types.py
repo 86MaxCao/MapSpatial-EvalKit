@@ -126,9 +126,43 @@ class RunContext:
     variant: str = ""
 
     def draw_instruction(self, sample: TaskSample) -> str:
-        """Per-question_type draw instruction (for external_draw strategy)."""
+        """Per-question_type draw instruction (for external_draw strategy).
+
+        Loads from configs/strategies/external_draw.yaml if available,
+        falls back to hardcoded _DRAW_INSTRUCTIONS.
+        """
         qt = sample.meta.get("question_type", "")
+        # Try YAML config first (11 question types, more complete)
+        yaml_instructions = _load_draw_instructions_yaml()
+        if qt in yaml_instructions:
+            return yaml_instructions[qt]
         return _DRAW_INSTRUCTIONS.get(qt, "Draw a helpful intermediate diagram.")
+
+
+def _load_draw_instructions_yaml() -> dict[str, str]:
+    """Load draw_instruction from configs/strategies/external_draw.yaml.
+
+    Cached after first load. Returns empty dict if file not found.
+    """
+    global _YAML_DRAW_INSTRUCTIONS
+    if _YAML_DRAW_INSTRUCTIONS is not None:
+        return _YAML_DRAW_INSTRUCTIONS
+    import os
+    yaml_path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "configs", "strategies", "external_draw.yaml",
+    )
+    try:
+        import yaml
+        with open(yaml_path) as f:
+            cfg = yaml.safe_load(f)
+        _YAML_DRAW_INSTRUCTIONS = cfg.get("draw_instruction", {})
+    except Exception:
+        _YAML_DRAW_INSTRUCTIONS = {}
+    return _YAML_DRAW_INSTRUCTIONS
+
+
+_YAML_DRAW_INSTRUCTIONS: dict[str, str] | None = None
 
 
 _DRAW_INSTRUCTIONS: dict[str, str] = {

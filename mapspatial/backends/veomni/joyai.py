@@ -223,8 +223,10 @@ class JoyAIBackend(Backend):
 
         with torch.no_grad():
             # Use JoyAIImageModel's built-in generate_image method
+            # Pass context images for image-conditioned generation (I2I)
             output = self._und_model.generate_image(
                 prompt=prompt,
+                image=context_images[0] if context_images else None,
                 height=height,
                 width=width,
                 num_inference_steps=steps,
