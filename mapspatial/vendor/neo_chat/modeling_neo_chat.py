@@ -1785,7 +1785,7 @@ class NEOChatModel(PreTrainedModel):
                 max_pixels=min(2048 * 2048, (4096 * 4096) // len(images)),
                 upscale=False,
             )
-            pixel_values.append(cur_pv.to(self.device).to(torch.bfloat16))
+            pixel_values.append(cur_pv.to(self.device).to(self.dtype))
             grid_hw.append(cur_ghw.to(self.device))
         pixel_values = torch.cat(pixel_values)
         grid_hw = torch.cat(grid_hw)
