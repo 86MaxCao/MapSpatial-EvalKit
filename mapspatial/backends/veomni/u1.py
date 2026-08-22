@@ -235,7 +235,12 @@ class U1Backend(Backend):
     # ------------------------------------------------------------------
 
     def draw(self, context: Message, instruction: str, **kw):
-        """Image-to-image generation via model.it2i_generate()."""
+        """Image-to-image generation via model.it2i_generate().
+
+        The model is loaded in bfloat16 but some generation ops (VAE conv,
+        flash attention) don't support it. Temporarily cast to float32
+        for generation, then restore original dtype.
+        """
         from PIL import Image
 
         pil_images: list = []
@@ -258,18 +263,28 @@ class U1Backend(Backend):
         num_steps = kw.get("num_steps", self._num_steps)
         seed = kw.get("seed", self._seed)
 
-        with torch.inference_mode():
-            output = self._model.it2i_generate(
-                tokenizer=self._tokenizer,
-                prompt=full_prompt,
-                images=pil_images if pil_images else None,
-                image_size=image_size,
-                cfg_scale=cfg_scale,
-                img_cfg_scale=1.0,
-                num_steps=num_steps,
-                seed=seed,
-                think_mode=self._think_mode,
-            )
+        # Cast model to float32 for generation (bfloat16 unsupported by some ops)
+        orig_dtype = next(self._model.parameters()).dtype
+        if orig_dtype == torch.bfloat16:
+            self._model.float()
+
+        try:
+            with torch.inference_mode():
+                output = self._model.it2i_generate(
+                    tokenizer=self._tokenizer,
+                    prompt=full_prompt,
+                    images=pil_images if pil_images else None,
+                    image_size=image_size,
+                    cfg_scale=cfg_scale,
+                    img_cfg_scale=1.0,
+                    num_steps=num_steps,
+                    seed=seed,
+                    think_mode=self._think_mode,
+                )
+        finally:
+            # Restore original dtype
+            if orig_dtype == torch.bfloat16:
+                self._model.to(orig_dtype)
 
         if isinstance(output, torch.Tensor):
             image_tensor = output.clamp(-1, 1) * 0.5 + 0.5
