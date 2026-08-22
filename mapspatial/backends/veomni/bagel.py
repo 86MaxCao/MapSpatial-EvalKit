@@ -95,13 +95,16 @@ class BagelBackend(Backend):
                 self.patch_size = patch_size
             def _make_divisible(self, value, stride):
                 return max(stride, int(round(value / stride) * stride))
-            def __call__(self, img):
+            def resize_transform(self, img):
+                """Resize a PIL Image and return PIL (no tensor conversion)."""
                 w, h = img.size
                 scale = min(self.max_size / max(w, h), 1.0)
                 scale = max(scale, self.min_size / min(w, h))
-                new_w = self._make_divisible(round(w * scale), self.patch_size)
-                new_h = self._make_divisible(round(h * scale), self.patch_size)
-                img = img.resize((new_w, new_h), Image.BICUBIC)
+                new_w = max(self.patch_size, int(round(round(w * scale) / self.patch_size) * self.patch_size))
+                new_h = max(self.patch_size, int(round(round(h * scale) / self.patch_size) * self.patch_size))
+                return img.resize((new_w, new_h), Image.BICUBIC)
+            def __call__(self, img):
+                img = self.resize_transform(img)
                 tensor = torch.tensor(np.array(img)).permute(2, 0, 1).float() / 255.0
                 tensor = (tensor - 0.5) / 0.5
                 return tensor
@@ -171,6 +174,13 @@ class BagelBackend(Backend):
     def _get_inferencer(self):
         """Lazy-create the InterleaveInferencer from vendored imports."""
         if self._inferencer is None:
+            # Ensure new_token_ids are tensors on the model device
+            nti = self._new_token_ids
+            nti = {
+                k: torch.tensor(v, device=self._device) if not torch.is_tensor(v) else v.to(self._device)
+                for k, v in nti.items()
+            }
+            self._new_token_ids = nti
             from ...vendor.bagel_interleave.inferencer import InterleaveInferencer
             self._inferencer = InterleaveInferencer(
                 model=self._model,
@@ -178,7 +188,7 @@ class BagelBackend(Backend):
                 tokenizer=self._tokenizer,
                 vae_transform=self._vae_transform,
                 vit_transform=self._image_transform,
-                new_token_ids=self._new_token_ids,
+                new_token_ids=nti,
             )
         return self._inferencer
 
@@ -367,6 +377,85 @@ class BagelBackend(Backend):
         return Prediction(
             text=final_text,
             generated_images=generated_images,  # PIL Images; strategy saves them
+            trace=trace,
+            meta={
+                "rounds": round_num,
+                "draw_triggered": len(generated_images) > 0,
+            },
+        )
+
+    def forced_interleave(
+        self,
+        message: Message,
+        *,
+        max_rounds: int = 1,
+        **kw,
+    ) -> Prediction:
+        """Forced interleaved reasoning — no marker needed.
+
+        Generates text reasoning, then unconditionally generates an image,
+        feeds it back into the shared KV cache, and generates the final answer.
+
+        For base Bagel which was not trained to emit '<image_start>' markers.
+        """
+        import torch
+        from PIL import Image
+
+        inferencer = self._get_inferencer()
+        input_list = to_interleave_list(message)
+
+        trace: list[TraceStep] = []
+        t0 = time.time()
+
+        with torch.no_grad():
+            output = inferencer.forced_interleave_inference(
+                input_lists=input_list,
+                think=True,
+                max_think_token_n=kw.get("max_think_tokens", self._max_think_tokens),
+                do_sample=kw.get("temperature", self._temperature) > 0,
+                text_temperature=kw.get("temperature", self._temperature) or 1.0,
+                cfg_text_scale=self._cfg_text_scale,
+                cfg_img_scale=self._cfg_img_scale,
+                cfg_interval=self._cfg_interval,
+                timestep_shift=self._timestep_shift,
+                num_timesteps=self._num_timesteps,
+                cfg_renorm_min=self._cfg_renorm_min,
+                cfg_renorm_type=self._cfg_renorm_type,
+                image_shapes=self._image_shapes,
+                max_rounds=max_rounds,
+            )
+
+        elapsed = time.time() - t0
+
+        # Parse output: [text_reasoning, image, text_answer]
+        text_parts = []
+        generated_images = []
+        round_num = 0
+
+        for item in output:
+            if isinstance(item, str):
+                trace.append(TraceStep(
+                    round=round_num, kind="text",
+                    text=item,
+                    triggered_by=None,
+                    elapsed_s=elapsed / max(len(output), 1),
+                ))
+                text_parts.append(item)
+            elif isinstance(item, Image.Image):
+                trace.append(TraceStep(
+                    round=round_num, kind="image",
+                    triggered_by="forced",
+                    elapsed_s=elapsed / max(len(output), 1),
+                ))
+                generated_images.append(item)
+                round_num += 1
+
+        # Last text part is the final answer
+        final_text = text_parts[-1] if text_parts else ""
+
+        return Prediction(
+            text=final_text,
+            generated_images=generated_images,
             trace=trace,
             meta={
                 "rounds": round_num,

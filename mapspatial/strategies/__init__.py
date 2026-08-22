@@ -4,11 +4,13 @@ from .base import Strategy  # noqa: F401
 from .direct import DirectStrategy  # noqa: F401
 from .native_interleave import NativeInterleaveStrategy  # noqa: F401
 from .external_draw import ExternalDrawStrategy  # noqa: F401
+from .forced_interleave import ForcedInterleaveStrategy  # noqa: F401
 
 _STRATEGY_REGISTRY: dict[str, type[Strategy]] = {
     "direct": DirectStrategy,
     "native_interleave": NativeInterleaveStrategy,
     "external_draw": ExternalDrawStrategy,
+    "forced_interleave": ForcedInterleaveStrategy,
 }
 
 

@@ -24,4 +24,4 @@ backend_args:
   image_shapes: [1024, 1024]
   max_rounds: 3
 
-strategies: [direct, native_interleave, external_draw]
+strategies: [direct, native_interleave, external_draw, forced_interleave]

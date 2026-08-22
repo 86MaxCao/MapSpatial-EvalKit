@@ -57,6 +57,12 @@ class InterleaveInferencer:
             tokenizer=self.tokenizer, 
             new_token_ids=self.new_token_ids,
         )
+        # Move tensors to model device (tokenizer outputs are on CPU)
+        _device = next(self.model.parameters()).device
+        generation_input = {
+            k: v.to(_device) if torch.is_tensor(v) else v
+            for k, v in generation_input.items()
+        }
 
         past_key_values = self.model.forward_cache_update_text(past_key_values, **generation_input)        
         gen_context['kv_lens'] = kv_lens
@@ -73,6 +79,7 @@ class InterleaveInferencer:
         past_key_values = gen_context['past_key_values']
         kv_lens = gen_context['kv_lens']
         ropes =  gen_context['ropes']
+        _device = next(self.model.parameters()).device
 
         if vae:
             ## update vae
@@ -83,6 +90,10 @@ class InterleaveInferencer:
                 transforms=self.vae_transform, 
                 new_token_ids=self.new_token_ids,
             )
+            generation_input = {
+                k: v.to(_device) if torch.is_tensor(v) else v
+                for k, v in generation_input.items()
+            }
             past_key_values = self.model.forward_cache_update_vae(self.vae_model, past_key_values, **generation_input)
         
         if vit:
@@ -94,6 +105,10 @@ class InterleaveInferencer:
                 transforms=self.vit_transform, 
                 new_token_ids=self.new_token_ids,
             )
+            generation_input = {
+                k: v.to(_device) if torch.is_tensor(v) else v
+                for k, v in generation_input.items()
+            }
             past_key_values = self.model.forward_cache_update_vit(past_key_values, **generation_input)
 
         gen_context['kv_lens'] = kv_lens
@@ -130,8 +145,12 @@ class InterleaveInferencer:
             curr_rope=ropes, 
             image_sizes=[image_shape], 
             new_token_ids=self.new_token_ids,
-            noise_seed=noise_seed,
         ) 
+        _device = next(self.model.parameters()).device
+        generation_input = {
+            k: v.to(_device) if torch.is_tensor(v) else v
+            for k, v in generation_input.items()
+        }
         
         # text cfg
         cfg_text_past_key_values = cfg_text_precontext['past_key_values']
@@ -142,6 +161,10 @@ class InterleaveInferencer:
             curr_rope=ropes_cfg, 
             image_sizes=[image_shape], 
         )
+        generation_input_cfg_text = {
+            k: v.to(_device) if torch.is_tensor(v) else v
+            for k, v in generation_input_cfg_text.items()
+        }
 
         # img cfg
         cfg_img_past_key_values = cfg_img_precontext['past_key_values']
@@ -152,6 +175,10 @@ class InterleaveInferencer:
             curr_rope=ropes_cfg, 
             image_sizes=[image_shape], 
         )
+        generation_input_cfg_img = {
+            k: v.to(_device) if torch.is_tensor(v) else v
+            for k, v in generation_input_cfg_img.items()
+        }
 
         unpacked_latent = self.model.generate_image(
             past_key_values=past_key_values,
@@ -173,7 +200,6 @@ class InterleaveInferencer:
             cfg_img_packed_query_indexes=generation_input_cfg_img['cfg_packed_query_indexes'],
             cfg_img_key_values_lens=generation_input_cfg_img['cfg_key_values_lens'],
             cfg_img_packed_key_value_indexes=generation_input_cfg_img['cfg_packed_key_value_indexes'],
-            enable_taylorseer=enable_taylorseer,
         )
 
         image = self.decode_image(unpacked_latent[0], image_shape)
@@ -242,11 +268,17 @@ class InterleaveInferencer:
 
     @torch.no_grad()
     def gen_text(self, gen_context, max_length: int = 500, do_sample: bool = True, temperature: float = 1.0):
+        gen_context = deepcopy(gen_context)
         past_key_values = gen_context['past_key_values']
         kv_lens = list(gen_context['kv_lens'])
         ropes = list(gen_context['ropes'])
 
         generation_input = self.model.prepare_start_tokens(kv_lens, ropes, self.new_token_ids)
+        _device = next(self.model.parameters()).device
+        generation_input = {
+            k: v.to(_device) if torch.is_tensor(v) else v
+            for k, v in generation_input.items()
+        }
         unpacked_latent = self.model.generate_text(
             past_key_values=past_key_values,
             max_length=max_length,
@@ -348,7 +380,105 @@ class InterleaveInferencer:
                         break
 
         return output_list
-    
+
+    @torch.no_grad()
+    def forced_interleave_inference(
+        self,
+        input_lists: List[Union[str, Image.Image]],
+        think=False,
+        max_think_token_n=1000,
+        do_sample=False,
+        text_temperature=0.3,
+        cfg_text_scale=3.0,
+        cfg_img_scale=1.5,
+        cfg_interval=[0.4, 1.0],
+        timestep_shift=3.0,
+        num_timesteps=50,
+        cfg_renorm_min=0.0,
+        cfg_renorm_type="global",
+        image_shapes=(1024, 1024),
+        noise_seed=None,
+        max_rounds: int = 1,
+    ) -> List[Union[str, Image.Image]]:
+        """Forced interleave: always generate an image after first text round.
+
+        Unlike interleave_inference which waits for '<image_start>' marker,
+        this method unconditionally generates an image after the first text
+        reasoning round, feeds it back into the KV cache, then continues
+        text generation for the final answer.
+
+        For models not trained to emit markers (e.g. base Bagel).
+        """
+        output_list = []
+        gen_context = self.init_gen_context()
+        cfg_text_context = deepcopy(gen_context)
+        cfg_img_context = deepcopy(gen_context)
+
+        with torch.autocast(device_type="cuda", enabled=True, dtype=torch.bfloat16):
+            if think:
+                system_prompt = GEN_THINK_SYSTEM_PROMPT
+                gen_context = self.update_context_text(system_prompt, gen_context)
+                cfg_img_context = self.update_context_text(system_prompt, cfg_img_context)
+
+            for input_term in input_lists:
+                if isinstance(input_term, str):
+                    cfg_text_context = deepcopy(gen_context)
+                    gen_context = self.update_context_text(input_term, gen_context)
+                    cfg_img_context = self.update_context_text(input_term, cfg_img_context)
+
+                elif isinstance(input_term, Image.Image):
+                    input_term = self.vae_transform.resize_transform(pil_img2rgb(input_term))
+                    gen_context = self.update_context_image(input_term, gen_context, vae=True)
+                    image_shapes = input_term.size[::-1]
+                    cfg_text_context = deepcopy(gen_context)
+
+                else:
+                    raise ValueError(f"Unsupported input type: {type(input_term)}")
+
+            # Round 1: text reasoning
+            gen_text = self.gen_text(
+                gen_context,
+                do_sample=do_sample,
+                temperature=text_temperature,
+                max_length=max_think_token_n,
+            )
+            output_list.append(gen_text)
+            gen_context = self.update_context_text(gen_text, gen_context)
+
+            # Force image generation (no marker check)
+            rounds = 0
+            while rounds < max_rounds:
+                img = self.gen_image(
+                    image_shapes,
+                    gen_context,
+                    cfg_text_precontext=cfg_text_context,
+                    cfg_img_precontext=cfg_img_context,
+                    cfg_text_scale=cfg_text_scale,
+                    cfg_img_scale=cfg_img_scale,
+                    cfg_interval=cfg_interval,
+                    timestep_shift=timestep_shift,
+                    num_timesteps=num_timesteps,
+                    cfg_renorm_min=cfg_renorm_min,
+                    cfg_renorm_type=cfg_renorm_type,
+                    noise_seed=noise_seed,
+                )
+                output_list.append(img)
+
+                img_input = self.vae_transform.resize_transform(pil_img2rgb(img))
+                gen_context = self.update_context_image(img_input, gen_context, vae=True)
+                rounds += 1
+
+            # Final text: answer with image context
+            gen_text = self.gen_text(
+                gen_context,
+                do_sample=do_sample,
+                temperature=text_temperature,
+                max_length=max_think_token_n,
+            )
+            output_list.append(gen_text)
+
+        return output_list
+
     def __call__(
         self, 
         image: Optional[Image.Image] = None, 
