@@ -1687,7 +1687,16 @@ class NEOChatModel(PreTrainedModel):
         indexes = self.get_thw_indexes(input_ids[0], grid_hw)
         attention_mask = create_block_causal_mask(indexes[0])
 
-        input_embeds = self.language_model.get_input_embeddings()(input_ids)
+        # nn.Embedding lookup doesn't support bfloat16 in aten::embedding;
+        # temporarily cast weight to float32, then cast result back
+        embed_layer = self.language_model.get_input_embeddings()
+        _orig_w = embed_layer.weight.data
+        if _orig_w.dtype == torch.bfloat16:
+            embed_layer.weight.data = _orig_w.float()
+        input_embeds = embed_layer(input_ids)
+        if _orig_w.dtype == torch.bfloat16:
+            embed_layer.weight.data = _orig_w
+            input_embeds = input_embeds.to(_orig_w.dtype)
         B, N, C = input_embeds.shape
         if pixel_values is not None:
             vit_embeds = self.extract_feature(pixel_values, grid_hw=grid_hw)
