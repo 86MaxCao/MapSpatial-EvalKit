@@ -263,16 +263,10 @@ class U1Backend(Backend):
         num_steps = kw.get("num_steps", self._num_steps)
         seed = kw.get("seed", self._seed)
 
-        # Cast generation modules to float32 (VAE/conv don't support bfloat16)
-        # Keep language_model in bfloat16 (flash attention needs it)
-        casted_modules = []
-        if hasattr(self._model, 'fm_modules'):
-            for name, module in self._model.fm_modules.items():
-                module.float()
-                casted_modules.append(name)
-
-        try:
-            with torch.inference_mode():
+        # Use autocast: keep bfloat16 for flash attention, auto-upcast to
+        # float32 for ops that don't support bfloat16 (VAE conv, etc.)
+        with torch.inference_mode():
+            with torch.autocast(device_type="cuda", dtype=torch.float32):
                 output = self._model.it2i_generate(
                     tokenizer=self._tokenizer,
                     prompt=full_prompt,
@@ -284,11 +278,6 @@ class U1Backend(Backend):
                     seed=seed,
                     think_mode=self._think_mode,
                 )
-        finally:
-            # Restore fm_modules to bfloat16
-            orig_dtype = next(self._model.language_model.parameters()).dtype
-            for name in casted_modules:
-                getattr(self._model.fm_modules, name).to(orig_dtype)
 
         if isinstance(output, torch.Tensor):
             image_tensor = output.clamp(-1, 1) * 0.5 + 0.5
