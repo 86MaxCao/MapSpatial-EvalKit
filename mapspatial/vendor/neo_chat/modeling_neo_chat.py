@@ -1713,8 +1713,10 @@ class NEOChatModel(PreTrainedModel):
 
     def _t2i_predict_v(self, input_embeds, indexes_image, past_key_values, t, z, image_token_num, image_size=None):
         B, L = z.shape[0], z.shape[1]
+        # Cast input to LLM dtype (bfloat16), output to float32 for fm_head
+        llm_dtype = next(self.language_model.parameters()).dtype
         outputs = self.language_model.model(
-            inputs_embeds=input_embeds,
+            inputs_embeds=input_embeds.to(llm_dtype),
             image_gen_indicators=torch.ones(
                 (input_embeds.shape[0], input_embeds.shape[1]), dtype=torch.bool, device=input_embeds.device
             ),
@@ -1725,9 +1727,9 @@ class NEOChatModel(PreTrainedModel):
             use_cache=True,
         )
 
-        # Cast LLM output to float32 for fm_head (some ops don't support bfloat16)
+        # Cast LLM output to float32 for fm_head
         hidden = outputs.last_hidden_state[:, -image_token_num:].view(B, L, -1).float()
-        t_float = t.float() if not t.is_floating_point() or t.dtype != torch.float32 else t
+        t_float = t.float() if t.dtype != torch.float32 else t
 
         if self.use_deep_fm_head:
             x_pred = self.fm_modules["fm_head"](
