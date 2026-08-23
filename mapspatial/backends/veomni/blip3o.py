@@ -229,12 +229,24 @@ class BLIP3oBackend(Backend):
         return img.resize((new_w, new_h), Image.BICUBIC)
 
     def _prepare_vision_input(self, pil_images, device):
-        """Preprocess images: resize -> /255.0 -> bf16 -> (N, 3, H, W)."""
+        """Preprocess images: resize -> /255.0 -> bf16 -> (N, 3, H, W).
+
+        All images are resized to the same dimensions (first image's size)
+        to ensure torch.stack succeeds when images have different aspect ratios.
+        """
         import numpy as np
         tensors = []
+        # Determine target size from first image
+        target_img = self._pil_img2rgb(pil_images[0])
+        target_img = self._resize_image(target_img, 980, 224, 14)
+        target_h, target_w = target_img.size[1], target_img.size[0]
         for img in pil_images:
             img = self._pil_img2rgb(img)
             img = self._resize_image(img, 980, 224, 14)
+            # Force same size as first image
+            if img.size[1] != target_h or img.size[0] != target_w:
+                from PIL import Image as _PIL
+                img = img.resize((target_w, target_h), _PIL.BICUBIC)
             tensor = torch.tensor(np.array(img)).permute(2, 0, 1).float() / 255.0
             tensors.append(tensor)
         pixel_values = torch.stack(tensors).to(device)
