@@ -200,6 +200,7 @@ class JoyAIImageModel(PreTrainedModel):
         negative_prompt: str = "",
         seed: int = 42,
         output_type: str = "pt",
+        images=None,
     ):
         """Generation inference via the MMDiT + VAE pipeline.
 
@@ -212,6 +213,8 @@ class JoyAIImageModel(PreTrainedModel):
             negative_prompt: Negative prompt (empty string for none).
             seed: Random seed for reproducibility.
             output_type: 'pt' for tensor, 'pil' for PIL Image.
+            images: Optional list of PIL images for image-conditioned
+                generation (I2I). None for text-to-image only.
 
         Returns:
             Generated image (torch.Tensor or PIL.Image depending on output_type).
@@ -223,7 +226,7 @@ class JoyAIImageModel(PreTrainedModel):
         output = self.pipeline(
             prompt=[prompt],
             negative_prompt=[negative_prompt],
-            images=None,
+            images=images,
             height=height,
             width=width,
             num_frames=1,

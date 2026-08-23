@@ -218,13 +218,23 @@ class LatentUMBackend(Backend):
                     seed=seed,
                 )
 
-        # Decode latents to image using external decoder if available
+        # Decode latents to image using external decoder if available.
+        # The decoder is a sibling checkpoint (e.g. LatentUM-Decoder), not a
+        # subdirectory of the main model.  Follow the official generate_images()
+        # pipeline: convert latent token IDs to continuous features via the
+        # quantizer, then call decoder.decode() which runs SD3.5 + VAE.
         decoder_path = self._cfg.backend_args.get("decoder_path", "")
         if decoder_path:
             from model.latentum.modeling_latentum import LatentUMDecoderModel
-            decoder = LatentUMDecoderModel.from_pretrained(decoder_path, dtype=torch.bfloat16)
-            decoder = decoder.to(self._device).eval()
-            image = decoder(latents)
-            return image
+            decoder = LatentUMDecoderModel.from_pretrained(
+                decoder_path, device=self._device, dtype=torch.bfloat16,
+            )
+            decoder = decoder.eval()
+            # Official pipeline: indices_to_feature → decoder.decode → [PIL]
+            z_q, _ = self._model.quantizer.indices_to_feature(
+                latents.to(self._device),
+            )
+            images = decoder.decode(z_q, seed=seed)
+            return images[0]
 
         raise RuntimeError("No decoder available for image generation")

@@ -21,6 +21,6 @@ backend_args:
   temperature: 0.9
   top_k: 50
   top_p: 0.95
-  decoder_path: ${CKPT_DIR}/LatentUM-Base/decoder
+  decoder_path: ${CKPT_DIR}/LatentUM-Decoder
 
 strategies: [direct, external_draw]

@@ -160,6 +160,7 @@ class ShowO2Backend(Backend):
         tokenizer = self._tokenizer
         tids = self._showo_token_ids
         inner = model.showo2
+        model_dtype = next(inner.parameters()).dtype
 
         # Extract text and images
         input_list = to_interleave_list(msg)

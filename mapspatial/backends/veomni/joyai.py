@@ -226,13 +226,13 @@ class JoyAIBackend(Backend):
             # Pass context images for image-conditioned generation (I2I)
             output = self._und_model.generate_image(
                 prompt=prompt,
-                image=context_images[0] if context_images else None,
+                images=context_images if context_images else None,
                 height=height,
                 width=width,
                 num_inference_steps=steps,
                 guidance_scale=guidance_scale,
                 seed=seed,
-                output_type="pil",
+                output_type="pt",
             )
 
         # Extract PIL image from output

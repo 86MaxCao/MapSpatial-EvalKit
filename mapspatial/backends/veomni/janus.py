@@ -273,7 +273,10 @@ class JanusBackend(Backend):
         ).input_ids.to(self._device)
 
         # Prepare text embeddings
-        embed_layer = self._model.get_input_embeddings()
+        # Janus does not define get_input_embeddings(); access it through
+        # language_model (LlamaForCausalLM), matching the official Janus code
+        # in prepare_inputs_embeds() and forward().
+        embed_layer = self._model.language_model.get_input_embeddings()
         text_embeds = embed_layer(input_ids)  # [1, T_text, D]
 
         # If context images available, encode them and prepend to text embeds

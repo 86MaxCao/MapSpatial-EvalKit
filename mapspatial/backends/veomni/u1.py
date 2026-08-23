@@ -114,6 +114,8 @@ class U1Backend(Backend):
                 results.append(Prediction(text=text))
             except Exception as e:
                 _tb_str = ''.join(_tb.format_tb(e.__traceback__))
+                with open("/tmp/u1_understand_error.txt", "w") as f:
+                    f.write(f"[U1 UNDERSTAND ERROR] {e}\n{_tb_str}\n")
                 print(f"[U1 understand ERROR] {e}\n{_tb_str}", file=sys.stderr, flush=True)
                 results.append(Prediction(error=str(e)))
         return results
@@ -296,21 +298,25 @@ class U1Backend(Backend):
                     seed=seed,
                     think_mode=self._think_mode,
                 )
+
+            # Convert generated tensor to PIL image.
+            # it2i_generate returns a bfloat16 tensor; numpy doesn't support
+            # bfloat16, so we MUST cast to float32 before .numpy().
+            # (Official U1 _to_pil does the same: batch.float().cpu().numpy())
+            if isinstance(output, torch.Tensor):
+                image_tensor = output.float().clamp(-1, 1) * 0.5 + 0.5
+                image_tensor = image_tensor.cpu().squeeze(0)
+                image_np = (image_tensor.permute(1, 2, 0).numpy() * 255).round().astype("uint8")
+                pil_image = Image.fromarray(image_np)
+            elif isinstance(output, Image.Image):
+                pil_image = output
+            else:
+                raise RuntimeError(f"it2i_generate returned unexpected type: {type(output)}")
         except Exception as e:
             _tb_str = ''.join(_tb.format_tb(e.__traceback__))
             with open("/tmp/u1_error.txt", "w") as f:
                 f.write(f"[U1 DRAW ERROR] {e}\n{_tb_str}\n")
-            print(f"[U1 draw ERROR] {e}", file=sys.stderr, flush=True)
+            print(f"[U1 draw ERROR] {e}\n{_tb_str}", file=sys.stderr, flush=True)
             raise
-
-        if isinstance(output, torch.Tensor):
-            image_tensor = output.clamp(-1, 1) * 0.5 + 0.5
-            image_tensor = image_tensor.cpu().squeeze(0)
-            image_np = (image_tensor.permute(1, 2, 0).numpy() * 255).astype("uint8")
-            pil_image = Image.fromarray(image_np)
-        elif isinstance(output, Image.Image):
-            pil_image = output
-        else:
-            raise RuntimeError(f"it2i_generate returned unexpected type: {type(output)}")
 
         return pil_image

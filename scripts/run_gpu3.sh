@@ -8,8 +8,12 @@ MODELS=(                         # model configs: yaml name (configs/models/<nam
   "blip3o-8b"                    # VeOmni unified
   "show-o2-7b"                   # VeOmni unified
   "joyai-image"                  # VeOmni unified
-  "cambrian-s-7b"                # cambrian backend
-  "spatial-mllm"                 # spatial_mllm backend
+  # "cambrian-s-7b"                # cambrian backend
+  # "spatial-mllm"                 # spatial_mllm backend
+  # "sensenova-si-1.3-qwen3-vl-8b" # sensenova_si backend
+  # "sensenova-si-1.5-internvl3-8b"  # sensenova_si backend
+  # "internvl3-8b"                 # vLLM
+  # "internvl3-5-8b"               # vLLM
 )
 # VIEWS="sat,wprd01"                  # comma-separated tile types, e.g. sat,wprd01
 # TASKS="t1,t2"                       # comma-separated tasks, e.g. t1,t2
