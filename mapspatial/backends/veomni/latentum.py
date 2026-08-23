@@ -133,7 +133,7 @@ class LatentUMBackend(Backend):
                 from model.latentum.image_utils import load_image as _load_img
                 pv_list = []
                 for img in images:
-                    pv = _load_img(img, mode="RGB", max_num_patches=1)
+                    pv = _load_img(img, max_num=1)
                     pv_list.append(pv)
                 pixel_values = torch.cat(pv_list, dim=0).to(
                     self._device, dtype=next(self._model.internvl.parameters()).dtype,

@@ -61,6 +61,7 @@ _run_checks() {
 
         # Run 1 sample with 300s timeout
         # run_benchmark.sh sets CUDA_VISIBLE_DEVICES via --gpu
+        # stderr to file to avoid pipe blocking from tqdm output
         timeout 300 bash "${RUN_BENCH}" \
             "${MODEL}" \
             --gpu "${GPU}" \
@@ -71,7 +72,7 @@ _run_checks() {
             --variants base/direct \
             --batch-size 1 \
             --skip-preflight \
-            2>&1 | tail -3 || true
+            2>/tmp/preflight_${GPU}_${MODEL}.err || true
 
         # Find JSONL (model name dir is unknown, use find)
         local JSONL=$(find "${CHECK_OUT}" -name "direct.jsonl" -path "*/blank/t1/*" 2>/dev/null | head -1)
