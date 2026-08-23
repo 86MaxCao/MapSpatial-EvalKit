@@ -1,7 +1,5 @@
 #!/usr/bin/env bash
 # Pre-flight check: run 1 sample per model:strategy pair, verify no errors before full run.
-# Usage: bash scripts/preflight_check.sh [gpu2_script] [gpu3_script]
-# Reads MODELS array from the GPU scripts and tests each pair.
 set -euo pipefail
 
 MAMBA_ROOT_PREFIX="${MAMBA_ROOT_PREFIX:-/mnt/nas-tbt/caoziqi/micromamba}"
@@ -17,8 +15,8 @@ cd "${PROJECT_DIR}"
 DATA_ROOT="${DATA_ROOT:-/home/ximeng.czq/caoziqi/code/SpatialIntelligence/SpatialIntelligence-gate2building/data}"
 INPUT_DIR="${INPUT_DIR:-${DATA_ROOT}/benchmark_jsonl}"
 CHECK_DIR="/tmp/preflight_check"
+RUN_BENCH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/run_benchmark.sh"
 
-# ── Parse GPU and MODELS from the draw scripts ──────────────────────
 check_gpu2() {
     local GPU=2
     local MODELS=(
@@ -54,7 +52,6 @@ _run_checks() {
         local MODEL="${ENTRY%%:*}"
         local STRATEGY="${ENTRY##*:}"
         local CHECK_OUT="${CHECK_DIR}/gpu${GPU}/${MODEL}"
-        local JSONL="${CHECK_OUT}/${STRATEGY}/blank/t1/base/direct.jsonl"
 
         echo ""
         echo "--- [GPU ${GPU}] ${MODEL} | ${STRATEGY} ---"
@@ -62,9 +59,8 @@ _run_checks() {
         # Clean old check results
         find "${CHECK_OUT}" -type f -delete 2>/dev/null || true
 
-        # Run 1 sample with 300s timeout via run_benchmark.sh (sets CUDA_VISIBLE_DEVICES)
-        # stderr is NOT suppressed so we can see loading errors
-        local RUN_BENCH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/run_benchmark.sh"
+        # Run 1 sample with 300s timeout
+        # run_benchmark.sh sets CUDA_VISIBLE_DEVICES via --gpu
         timeout 300 bash "${RUN_BENCH}" \
             "${MODEL}" \
             --gpu "${GPU}" \
@@ -75,10 +71,12 @@ _run_checks() {
             --variants base/direct \
             --batch-size 1 \
             --skip-preflight \
-            2>&1 | tail -5 || true
+            2>&1 | tail -3 || true
 
-        # Check result
-        if [ ! -f "${JSONL}" ]; then
+        # Find JSONL (model name dir is unknown, use find)
+        local JSONL=$(find "${CHECK_OUT}" -name "direct.jsonl" -path "*/blank/t1/*" 2>/dev/null | head -1)
+
+        if [ -z "${JSONL}" ] || [ ! -f "${JSONL}" ]; then
             echo "  FAIL: no output file (timeout or crash)"
             ALL_PASS=false
             continue
@@ -92,8 +90,8 @@ _run_checks() {
         fi
 
         # Check first line for error
-        local ERR=$(python3 -c "
-import json, sys
+        local RESULT=$(python3 -c "
+import json
 with open('${JSONL}') as f:
     d = json.loads(f.readline())
 e = d.get('error', '')
@@ -103,11 +101,11 @@ else:
     print('OK:', (d.get('prediction','') or '')[:80], '| imgs:', len(d.get('generated_images',[])), '| track:', d.get('track',''))
 " 2>/dev/null)
 
-        if [[ "${ERR}" == ERROR:* ]]; then
-            echo "  FAIL: ${ERR}"
+        if [[ "${RESULT}" == ERROR:* ]]; then
+            echo "  FAIL: ${RESULT}"
             ALL_PASS=false
         else
-            echo "  PASS: ${ERR}"
+            echo "  PASS: ${RESULT}"
         fi
     done
 
@@ -117,18 +115,15 @@ else:
     else
         echo ">>> GPU ${GPU}: SOME CHECKS FAILED — review before full run <<<"
     fi
-    echo "${ALL_PASS}"
 }
 
 # ── Run checks ────────────────────────────────────────────────────────
 echo "Starting pre-flight checks..."
-echo "Each model:strategy pair will run 1 sample with 120s timeout."
+echo "Each model:strategy pair will run 1 sample with 300s timeout."
 echo ""
 
-# Check GPU 2 (output prints directly, not captured)
 check_gpu2
 echo ""
-# Check GPU 3
 check_gpu3
 
 echo ""
