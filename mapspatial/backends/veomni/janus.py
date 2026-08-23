@@ -427,6 +427,6 @@ class JanusBackend(Backend):
         image_tensor = image_tensor * 0.5 + 0.5
         image_tensor = image_tensor.cpu().squeeze(0)  # [3, H, W]
 
-        image_np = (image_tensor.permute(1, 2, 0).numpy() * 255).astype("uint8")
+        image_np = (image_tensor.permute(1, 2, 0).float().numpy() * 255).astype("uint8")
         pil_image = Image.fromarray(image_np)
         return pil_image
