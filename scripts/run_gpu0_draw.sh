@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# GPU 3 — external_draw models
+# GPU 0 — external_draw models (prioritized)
 set -euo pipefail
-MODELS=( "sensenova-u1-8b:external_draw" "blip3o-8b:external_draw" )
+MODELS=( "bagel-7b:external_draw" )
 VIEWS="blank,sat,webrd04,wprd01"
 TASKS="t1,t2"
 VARIANTS="base/direct,base/oracle"
@@ -10,6 +10,6 @@ OUTPUT_DIR="${OUTPUT_DIR:-${PROJECT_DIR}/results_draw}"
 RUN_BENCH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/run_benchmark.sh"
 for ENTRY in "${MODELS[@]}"; do
     MODEL="${ENTRY%%:*}"; STRATEGY="${ENTRY##*:}"
-    echo "===== [gpu3] ${MODEL} | ${STRATEGY} ====="
-    bash "${RUN_BENCH}" "$MODEL" --gpu 3 --strategy "$STRATEGY" --output-dir "$OUTPUT_DIR" --views "$VIEWS" --tasks "$TASKS" --variants "$VARIANTS" "$@"
+    echo "===== [gpu0] ${MODEL} | ${STRATEGY} ====="
+    bash "${RUN_BENCH}" "$MODEL" --gpu 0 --strategy "$STRATEGY" --output-dir "$OUTPUT_DIR" --views "$VIEWS" --tasks "$TASKS" --variants "$VARIANTS" "$@"
 done
