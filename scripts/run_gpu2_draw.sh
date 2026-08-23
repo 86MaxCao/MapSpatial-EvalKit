@@ -4,11 +4,13 @@
 set -euo pipefail
 
 # ── Edit these before each run ─────────────────────────────────────────
-MODELS=(                         # model:strategy pairs
-  "bagel-7b:forced_interleave"        # base Bagel, not trained for marker → forced
-  "thinkmorph-7b:native_interleave"   # trained for <image_start> marker → autonomous
-  "latentum-base:external_draw"       # stateful loop not yet ported → restart
-  "janus-pro-7b:external_draw"        # no shared cache → restart
+MODELS=(                         # model:strategy pairs (pre-flight verified)
+  "bagel-7b:forced_interleave"        # PASS — stateful forced, shared KV cache
+  "bagel-7b:external_draw"            # PASS — restart baseline for comparison
+  "thinkmorph-7b:native_interleave"   # PASS — autonomous, marker-driven
+  "thinkmorph-7b:external_draw"       # PASS — restart baseline for comparison
+  "latentum-base:external_draw"       # PASS — restart with I2I generation
+  # "janus-pro-7b:external_draw"      # FAIL — multi-image processor shape mismatch
 )
 VIEWS="blank,sat,webrd04,wprd01"
 TASKS="t1,t2"
