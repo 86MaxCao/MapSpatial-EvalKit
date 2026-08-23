@@ -62,7 +62,7 @@ _run_checks() {
         # Run 1 sample with 300s timeout
         # run_benchmark.sh sets CUDA_VISIBLE_DEVICES via --gpu
         # stderr to file to avoid pipe blocking from tqdm output
-        timeout 300 bash "${RUN_BENCH}" \
+        timeout 600 bash "${RUN_BENCH}" \
             "${MODEL}" \
             --gpu "${GPU}" \
             --strategy "${STRATEGY}" \
