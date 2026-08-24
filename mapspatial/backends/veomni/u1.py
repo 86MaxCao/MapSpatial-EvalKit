@@ -282,24 +282,12 @@ class U1Backend(Backend):
         num_steps = kw.get("num_steps", self._num_steps)
         seed = kw.get("seed", self._seed)
 
-        # Cast model to float32 for generation — bfloat16 causes NaN in
-        # flow matching denoising loop (verified: output is all NaN in bf16).
-        # Understand() path works in bfloat16 (direct strategy verified OK).
+        # Cast model to float32 for generation — bfloat16 + flash_attn causes NaN
+        # in flow matching denoising loop. Understand() path works in bfloat16.
         _orig_dtype = next(self._model.parameters()).dtype
         if _orig_dtype == torch.bfloat16:
             self._model.float()
 
-        # Verify .float() actually worked
-        _verify_dtype = next(self._model.parameters()).dtype
-        with open("/tmp/u1_dtype_check.txt", "w") as _dc:
-            _dc.write(f"orig: {_orig_dtype}\n")
-            _dc.write(f"after .float(): {_verify_dtype}\n")
-            _dc.write(f"language_model: {next(self._model.language_model.parameters()).dtype}\n")
-            _dc.write(f"fm_head: {next(self._model.fm_modules['fm_head'].parameters()).dtype}\n")
-            _dc.write(f"vision_model: {next(self._model.vision_model.parameters()).dtype}\n")
-            _dc.write(f"vision_model_mot_gen: {next(self._model.fm_modules['vision_model_mot_gen'].parameters()).dtype}\n")
-
-        import sys, traceback as _tb
         try:
             with torch.inference_mode():
                 output = self._model.it2i_generate(
@@ -315,25 +303,9 @@ class U1Backend(Backend):
                     seed=seed,
                     think_mode=self._think_mode,
                 )
-        except Exception as e:
-            _tb_str = ''.join(_tb.format_tb(e.__traceback__))
-            with open("/tmp/u1_draw_error.txt", "w") as f:
-                f.write(f"[U1 DRAW ERROR] {e}\n{_tb_str}\n")
-            raise
         finally:
             if _orig_dtype == torch.bfloat16:
                 self._model.to(_orig_dtype)
-
-        # Debug: log output tensor stats
-        with open("/tmp/u1_tensor_debug.txt", "w") as _dbg:
-            _dbg.write(f"type={type(output)}\n")
-            if hasattr(output, 'shape'):
-                _dbg.write(f"shape={output.shape}\n")
-                _dbg.write(f"dtype={output.dtype}\n")
-                _dbg.write(f"min={output.min().item()}\n")
-                _dbg.write(f"max={output.max().item()}\n")
-                _dbg.write(f"mean={output.mean().item()}\n")
-                _dbg.write(f"nan={torch.isnan(output).sum().item()}\n")
 
         # Convert generated tensor to PIL image.
         if isinstance(output, torch.Tensor):
