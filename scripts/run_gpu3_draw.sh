@@ -4,7 +4,7 @@ set -euo pipefail
 MODELS=( "sensenova-u1-8b:external_draw" "blip3o-8b:external_draw" )
 VIEWS="blank,sat,webrd04,wprd01"
 TASKS="t1,t2"
-VARIANTS="base/direct,base/oracle"
+VARIANTS="base/direct"
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUTPUT_DIR="${OUTPUT_DIR:-${PROJECT_DIR}/results_draw}"
 RUN_BENCH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/run_benchmark.sh"
