@@ -29,6 +29,7 @@ Strategy mapping:
 from __future__ import annotations
 
 import os
+import time
 from pathlib import Path
 from typing import ClassVar
 
@@ -38,7 +39,7 @@ from ...config import BackendConfig
 from ...compat import apply as apply_compat
 from ...messages import to_interleave_list, strip_placeholders
 from ...media import load_image
-from ...types import Capabilities, Message, Prediction
+from ...types import Capabilities, Message, Prediction, TraceStep
 from ...vendor.neo_chat.inference_utils import (
     load_image_native,
     get_thw_indexes,
@@ -53,7 +54,7 @@ class U1Backend(Backend):
     caps: ClassVar[Capabilities] = Capabilities(
         batch=False,            # serial loop, one sample at a time
         draw=True,              # it2i_generate for image generation
-        native_interleave=False,
+        native_interleave=True,
         max_images=24,
         video=False,
     )
@@ -319,3 +320,119 @@ class U1Backend(Backend):
             raise RuntimeError(f"it2i_generate returned unexpected type: {type(output)}")
 
         return pil_image
+
+    # ------------------------------------------------------------------
+    # interleave()
+    # ------------------------------------------------------------------
+
+    def interleave(
+        self,
+        message: Message,
+        *,
+        max_rounds: int = 3,
+        marker: str = "<image>",
+        **kw,
+    ) -> Prediction:
+        """Native interleaved text + image generation via model.interleave_gen().
+
+        The model generates text autoregressively; when it emits <img>,
+        flow-matching image generation kicks in, the result is re-encoded
+        back into the KV cache, and text generation continues.
+
+        dtype handling mirrors draw(): model is temporarily cast to float32
+        to avoid NaN in the flow-matching denoising loop, then restored.
+        """
+        from PIL import Image
+
+        # --- Build prompt + images from the interleaved message ---
+        input_list = to_interleave_list(message)
+        pil_images: list = []
+        text_parts: list[str] = []
+        for item in input_list:
+            if isinstance(item, str):
+                text_parts.append(item)
+            else:
+                pil_images.append(item)
+
+        prompt = strip_placeholders("\n".join(text_parts))
+
+        image_size = tuple(kw.get("image_size", self._image_size))
+        cfg_scale = kw.get("cfg_scale", self._cfg_scale)
+        num_steps = kw.get("num_steps", self._num_steps)
+        seed = kw.get("seed", self._seed)
+        think_mode = kw.get("think_mode", self._think_mode)
+
+        # Cast model to float32 for generation (same as draw())
+        _orig_dtype = next(self._model.parameters()).dtype
+        if _orig_dtype == torch.bfloat16:
+            self._model.float()
+
+        try:
+            with torch.inference_mode():
+                generated_text, generated_image_tensors = self._model.interleave_gen(
+                    tokenizer=self._tokenizer,
+                    prompt=prompt,
+                    images=pil_images if pil_images else None,
+                    image_size=image_size,
+                    cfg_scale=cfg_scale,
+                    img_cfg_scale=1.0,
+                    enable_timestep_shift=True,
+                    timestep_shift=3.0,
+                    num_steps=num_steps,
+                    seed=seed,
+                    think_mode=think_mode,
+                    max_images=max_rounds,
+                )
+        finally:
+            if _orig_dtype == torch.bfloat16:
+                self._model.to(_orig_dtype)
+
+        # --- Convert image tensors to PIL images ---
+        pil_generated: list = []
+        for img_tensor in generated_image_tensors:
+            if isinstance(img_tensor, torch.Tensor):
+                t = img_tensor.float().clamp(-1, 1) * 0.5 + 0.5
+                t = t.cpu().squeeze(0)
+                img_np = (t.permute(1, 2, 0).numpy() * 255).round().astype("uint8")
+                pil_generated.append(Image.fromarray(img_np))
+            elif isinstance(img_tensor, Image.Image):
+                pil_generated.append(img_tensor)
+
+        # --- Build trace ---
+        trace: list[TraceStep] = []
+        round_num = 0
+        # Split generated_text by marker to interleave text/image steps
+        segments = generated_text.split(marker)
+        img_idx = 0
+        elapsed_per = 0.0  # per-step timing not available; leave 0
+        for seg in segments:
+            seg = seg.strip()
+            if seg:
+                trace.append(TraceStep(
+                    round=round_num,
+                    kind="text",
+                    text=seg,
+                    triggered_by=None,
+                    elapsed_s=elapsed_per,
+                ))
+            if img_idx < len(pil_generated):
+                trace.append(TraceStep(
+                    round=round_num,
+                    kind="image",
+                    triggered_by="model_marker",
+                    elapsed_s=elapsed_per,
+                ))
+                # PIL image stored in the image field via generated_images
+                img_idx += 1
+                round_num += 1
+
+        return Prediction(
+            text=generated_text.replace(marker, "").strip(),
+            generated_images=pil_generated,
+            trace=trace,
+            meta={
+                "rounds": round_num,
+                "draw_triggered": len(pil_generated) > 0,
+                "backend": self.model_name,
+            },
+        )

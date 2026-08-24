@@ -23,4 +23,4 @@ backend_args:
   top_p: 0.95
   decoder_path: ${CKPT_DIR}/LatentUM-Decoder
 
-strategies: [direct, external_draw]
+strategies: [direct, external_draw, native_interleave]

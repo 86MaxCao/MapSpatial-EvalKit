@@ -17,4 +17,4 @@ backend_args:
   num_steps: 30
   image_size: [256, 256]
 
-strategies: [direct, external_draw]
+strategies: [direct, external_draw, native_interleave]

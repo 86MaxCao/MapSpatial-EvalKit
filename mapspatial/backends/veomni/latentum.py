@@ -10,12 +10,15 @@ from __future__ import annotations
 
 import os
 import sys
-import torch
+import time
+from copy import deepcopy
 from pathlib import Path
-from PIL import Image
 from typing import ClassVar
 
-from ...types import Capabilities, Message, Prediction
+import torch
+from PIL import Image
+
+from ...types import Capabilities, Message, Prediction, TraceStep
 from ...config import BackendConfig
 from ...compat import apply as apply_compat
 from ...messages import to_interleave_list, strip_placeholders
@@ -31,7 +34,7 @@ class LatentUMBackend(Backend):
     caps: ClassVar[Capabilities] = Capabilities(
         batch=False,
         draw=True,
-        native_interleave=False,
+        native_interleave=True,
         max_images=24,
         video=False,
     )
@@ -238,3 +241,343 @@ class LatentUMBackend(Backend):
             return images[0]
 
         raise RuntimeError("No decoder available for image generation")
+
+    # ------------------------------------------------------------------
+    # interleave() — native save-rewind-reinject loop
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _sample(logits: torch.Tensor, temperature: float, top_k: int, top_p: float) -> torch.Tensor:
+        """Top-k / top-p sampling (mirrors FrozenLakePlanner._sample)."""
+        logits = logits / max(temperature, 1e-5)
+        if top_k > 0:
+            values, _ = torch.topk(logits, min(top_k, logits.size(-1)))
+            logits = logits.masked_fill(logits < values[..., -1, None], float("-inf"))
+        probs = torch.softmax(logits, dim=-1)
+        if 0.0 < top_p < 1.0:
+            sorted_probs, sorted_indices = torch.sort(probs, descending=True)
+            cumulative_probs = torch.cumsum(sorted_probs, dim=-1)
+            sorted_mask = cumulative_probs > top_p
+            sorted_mask[..., 1:] = sorted_mask[..., :-1].clone()
+            sorted_mask[..., 0] = False
+            probs = probs.scatter(
+                -1,
+                sorted_indices,
+                sorted_probs.masked_fill(sorted_mask, 0.0),
+            )
+            probs = probs / probs.sum(dim=-1, keepdim=True)
+        return torch.multinomial(probs, num_samples=1)
+
+    @torch.inference_mode()
+    def interleave(
+        self,
+        message: Message,
+        *,
+        max_rounds: int = 3,
+        marker: str = "<img>",
+        **kw,
+    ) -> Prediction:
+        """Native interleaved reasoning loop using the save-rewind-reinject pattern.
+
+        Based on the official FrozenLakePlanner.generate() method:
+        1. Pre-fill prompt through LLM (vision_token_mask=0, use_cache=True)
+        2. AR text generation (vision_token_mask=0)
+        3. When ``<img>`` is emitted: save kv_before_img
+        4. Generate 256 VQ codes via ar_head (vision_token_mask=1)
+        5. Rewind to kv_before_img
+        6. Re-inject generated image embeddings via visual_projector (vision_token_mask=0)
+        7. Feed ``</img>`` token (vision_token_mask=0)
+        8. Continue text generation for final answer
+
+        Key differences from FrozenLakePlanner:
+        - General task prompts (not FrozenLake-specific)
+        - Multi-image input support
+        - Returns Prediction with text, generated_images, trace
+        """
+        IMG_START_TOKEN = "<img>"
+        IMG_END_TOKEN = "</img>"
+        IMG_CONTEXT_TOKEN = "<IMG_CONTEXT>"
+
+        internvl = self._model.internvl
+        tokenizer = self._model.tokenizer
+        quantizer = self._model.quantizer
+        device = self._device
+        dtype = self._model._runtime_dtype
+
+        num_image_token = internvl.num_image_token          # per-patch <IMG_CONTEXT> count (256)
+        num_gen_tokens = self._model.config.num_image_tokens  # VQ codes to generate (256)
+
+        img_start_id = tokenizer.convert_tokens_to_ids(IMG_START_TOKEN)
+        img_end_id = tokenizer.convert_tokens_to_ids(IMG_END_TOKEN)
+        img_context_id = tokenizer.convert_tokens_to_ids(IMG_CONTEXT_TOKEN)
+        eos_id = tokenizer.eos_token_id
+
+        # -- 1. Extract text + images from Message (same as _understand_one) ----
+        input_list = to_interleave_list(message)
+        images = [item for item in input_list if not isinstance(item, str)]
+        text_parts = [item for item in input_list if isinstance(item, str)]
+        prompt_text = strip_placeholders("\n".join(text_parts))
+
+        # -- 2. Preprocess images with official load_image ----------------------
+        pv_list: list[torch.Tensor] = []
+        if images:
+            from model.latentum.image_utils import load_image as _load_img
+            for img in images:
+                pv = _load_img(img, max_num=1)
+                if pv is None:
+                    raise RuntimeError(f"Failed to load image: {img}")
+                pv_list.append(pv)
+            pixel_values = torch.cat(pv_list, dim=0).to(device, dtype=dtype)
+            visual_emb = internvl.extract_feature(pixel_values)  # (N_patches, T, D)
+        else:
+            visual_emb = None
+
+        # -- 3. Build prompt with <image> placeholders --------------------------
+        from model.latentum.internvl.conversation import get_conv_template
+
+        template = get_conv_template(internvl.template)
+        if self._system_prompt:
+            template.system_message = self._system_prompt
+
+        question = ("<image>\n" * len(images)) + prompt_text if images else prompt_text
+        template.append_message(template.roles[0], question)
+        template.append_message(template.roles[1], None)
+        prompt = template.get_prompt()
+
+        # Replace each <image> placeholder with image token sequence
+        for pv in pv_list:
+            n_patches = pv.shape[0]
+            image_tokens = IMG_START_TOKEN + IMG_CONTEXT_TOKEN * (num_image_token * n_patches) + IMG_END_TOKEN
+            prompt = prompt.replace("<image>", image_tokens, 1)
+
+        # -- 4. Tokenize and build input_embeds ---------------------------------
+        tok_out = tokenizer([prompt], padding=True, padding_side="left",
+                            truncation=False, return_tensors="pt")
+        input_ids = tok_out["input_ids"].to(device)
+        attention_mask = tok_out["attention_mask"].to(device)
+
+        input_embeds = internvl.language_model.get_input_embeddings()(input_ids).clone()
+
+        # Inject visual embeddings at <IMG_CONTEXT> positions
+        if visual_emb is not None:
+            ctx_positions = (input_ids[0] == img_context_id).nonzero(as_tuple=True)[0]
+            emb_offset = 0
+            for patch_idx in range(visual_emb.shape[0]):
+                input_embeds[0, ctx_positions[emb_offset:emb_offset + num_image_token]] = visual_emb[patch_idx]
+                emb_offset += num_image_token
+
+        # -- 5. Pre-fill through LLM (vision_token_mask=0, use_cache=True) ------
+        vt_mask = torch.zeros(1, input_embeds.shape[1], device=device, dtype=dtype)
+        outputs = internvl.language_model.model(
+            inputs_embeds=input_embeds,
+            attention_mask=attention_mask,
+            vision_token_mask=vt_mask,
+            use_cache=True,
+        )
+        past_key_values = outputs.past_key_values
+        last_hidden = outputs.last_hidden_state[:, -1:, :]
+
+        # -- Generation params --------------------------------------------------
+        temperature = kw.get("temperature", self._temperature)
+        do_sample = kw.get("do_sample", self._do_sample)
+        max_text_tokens = kw.get("max_new_tokens", self._max_new_tokens)
+        cfg_scale = kw.get("cfg_scale", 1.0)
+        top_k = kw.get("top_k", 50)
+        top_p = kw.get("top_p", 0.95)
+
+        sampling_kwargs = {
+            "temperature": temperature if do_sample else 1.0,
+            "top_k": top_k,
+            "top_p": top_p,
+            "sample_logits": do_sample,
+        }
+
+        # -- 6-9. Main interleave loop ------------------------------------------
+        all_tokens: list[int] = []
+        trace_steps: list[TraceStep] = []
+        all_generated_codes: list[torch.Tensor] = []
+        round_idx = 0
+
+        def _pick_token(logits: torch.Tensor) -> int:
+            if do_sample:
+                return self._sample(logits, temperature, top_k, top_p).item()
+            return logits.argmax(dim=-1).item()
+
+        while round_idx < max_rounds:
+            round_idx += 1
+            step_tokens: list[int] = []
+            found_img = False
+            t_round = time.time()
+
+            # -- AR text generation -------------------------------------------
+            for _ in range(max_text_tokens):
+                logits = internvl.language_model.lm_head(last_hidden)[:, -1, :]
+                next_id = _pick_token(logits)
+                step_tokens.append(next_id)
+                all_tokens.append(next_id)
+
+                if next_id == img_start_id:
+                    # Save KV cache before image generation
+                    kv_before_img = deepcopy(past_key_values)
+
+                    # Feed <img> with vision_token_mask=1 → base_hidden for ar_head
+                    img_embed = internvl.language_model.get_input_embeddings()(
+                        torch.tensor([[next_id]], device=device)
+                    )
+                    outputs = internvl.language_model.model(
+                        inputs_embeds=img_embed,
+                        past_key_values=past_key_values,
+                        vision_token_mask=torch.ones(1, 1, device=device, dtype=dtype),
+                        use_cache=True,
+                    )
+                    past_key_values_phase2 = deepcopy(outputs.past_key_values)
+                    base_hidden = outputs.last_hidden_state
+                    found_img = True
+                    break
+
+                if next_id == eos_id:
+                    break
+
+                # Feed next text token (vision_token_mask=0)
+                next_embed = internvl.language_model.get_input_embeddings()(
+                    torch.tensor([[next_id]], device=device)
+                )
+                outputs = internvl.language_model.model(
+                    inputs_embeds=next_embed,
+                    past_key_values=past_key_values,
+                    vision_token_mask=torch.zeros(1, 1, device=device, dtype=dtype),
+                    use_cache=True,
+                )
+                past_key_values = outputs.past_key_values
+                last_hidden = outputs.last_hidden_state
+
+            # Record text trace step
+            text_elapsed = time.time() - t_round
+            text_content = tokenizer.decode(step_tokens, skip_special_tokens=True)
+            trace_steps.append(TraceStep(
+                round=round_idx,
+                kind="text",
+                text=text_content,
+                triggered_by="model_marker" if found_img else None,
+                elapsed_s=text_elapsed,
+            ))
+
+            if not found_img:
+                break
+
+            # -- 6. Image generation phase (256 VQ codes) ----------------------
+            t_img = time.time()
+            generated_codes: list[torch.Tensor] = []
+
+            # First VQ code from base_hidden
+            code = internvl.ar_head.generate_from_base_token(
+                base_hidden,
+                cfg_scale=cfg_scale,
+                sampling_kwargs=sampling_kwargs,
+            )
+            generated_codes.append(code)
+
+            # Remaining 255 VQ codes
+            for _ in range(num_gen_tokens - 1):
+                z_q, _ = quantizer.indices_to_feature(code.unsqueeze(1))
+                current_input = internvl.visual_projector(z_q)
+                outputs = internvl.language_model.model(
+                    inputs_embeds=current_input,
+                    past_key_values=past_key_values_phase2,
+                    vision_token_mask=torch.ones(1, 1, device=device, dtype=dtype),
+                    use_cache=True,
+                )
+                past_key_values_phase2 = outputs.past_key_values
+                code = internvl.ar_head.generate_from_base_token(
+                    outputs.last_hidden_state,
+                    cfg_scale=cfg_scale,
+                    sampling_kwargs=sampling_kwargs,
+                )
+                generated_codes.append(code)
+
+            generated_codes_tensor = torch.stack(generated_codes, dim=1)  # (1, 256, K)
+            all_generated_codes.append(generated_codes_tensor)
+
+            # -- 7. Rewind to kv_before_img -----------------------------------
+            img_embed = internvl.language_model.get_input_embeddings()(
+                torch.tensor([[img_start_id]], device=device)
+            )
+            outputs = internvl.language_model.model(
+                inputs_embeds=img_embed,
+                past_key_values=kv_before_img,
+                vision_token_mask=torch.zeros(1, 1, device=device, dtype=dtype),
+                use_cache=True,
+            )
+
+            # -- 8. Re-inject generated image embeddings (vision_token_mask=0) -
+            z_q, _ = quantizer.indices_to_feature(generated_codes_tensor)
+            x_proj = internvl.visual_projector(z_q)
+            outputs = internvl.language_model.model(
+                inputs_embeds=x_proj,
+                past_key_values=outputs.past_key_values,
+                vision_token_mask=torch.zeros(1, num_gen_tokens, device=device, dtype=dtype),
+                use_cache=True,
+            )
+            past_key_values = outputs.past_key_values
+
+            # Feed </img> token (vision_token_mask=0)
+            img_end_embed = internvl.language_model.get_input_embeddings()(
+                torch.tensor([[img_end_id]], device=device)
+            )
+            outputs = internvl.language_model.model(
+                inputs_embeds=img_end_embed,
+                past_key_values=past_key_values,
+                vision_token_mask=torch.zeros(1, 1, device=device, dtype=dtype),
+                use_cache=True,
+            )
+            past_key_values = outputs.past_key_values
+            last_hidden = outputs.last_hidden_state
+
+            all_tokens.append(img_end_id)
+
+            img_elapsed = time.time() - t_img
+            trace_steps.append(TraceStep(
+                round=round_idx,
+                kind="image",
+                triggered_by="model_marker",
+                elapsed_s=img_elapsed,
+            ))
+
+        # -- 10. Decode generated VQ codes via decoder -------------------------
+        generated_images: list[Image.Image] = []
+        decoder_path = self._cfg.backend_args.get("decoder_path", "")
+        if all_generated_codes and decoder_path:
+            from model.latentum.modeling_latentum import LatentUMDecoderModel
+            decoder = LatentUMDecoderModel.from_pretrained(
+                decoder_path, device=self._device, dtype=torch.bfloat16,
+            )
+            decoder = decoder.eval()
+            num_inf_steps = kw.get("num_inference_steps", 25)
+            guidance_scale = kw.get("guidance_scale", 1.0)
+            seed = kw.get("seed", 42)
+            for codes in all_generated_codes:
+                z_q, _ = quantizer.indices_to_feature(codes.to(self._device))
+                decoded = decoder.decode(
+                    z_q,
+                    seed=seed,
+                    num_inference_steps=num_inf_steps,
+                    guidance_scale=guidance_scale,
+                    height=self._model.config.image_size,
+                    width=self._model.config.image_size,
+                )
+                generated_images.append(decoded[0])
+
+        # -- 11. Return Prediction ----------------------------------------------
+        full_text = tokenizer.decode(all_tokens, skip_special_tokens=True)
+
+        return Prediction(
+            text=full_text.strip(),
+            generated_images=generated_images,
+            trace=trace_steps,
+            meta={
+                "strategy": "native_interleave",
+                "rounds": round_idx,
+                "draw_triggered": len(all_generated_codes) > 0,
+                "backend": self.model_name,
+            },
+        )
