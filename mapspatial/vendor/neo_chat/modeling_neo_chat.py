@@ -58,7 +58,7 @@ IMAGENET_STD = (0.229, 0.224, 0.225)
 try:
     from flash_attn import flash_attn_func
 
-    _HAS_FLASH_ATTN = True
+    _HAS_FLASH_ATTN = False  # Disabled: flash_attn may use bf16 internally causing NaN
 except ImportError:
     flash_attn_func = None
     _HAS_FLASH_ATTN = False
