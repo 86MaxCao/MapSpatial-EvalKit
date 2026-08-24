@@ -294,6 +294,8 @@ class U1Backend(Backend):
                     image_size=image_size,
                     cfg_scale=cfg_scale,
                     img_cfg_scale=1.0,
+                    enable_timestep_shift=True,
+                    timestep_shift=3.0,
                     num_steps=num_steps,
                     seed=seed,
                     think_mode=self._think_mode,
