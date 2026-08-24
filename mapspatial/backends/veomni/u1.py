@@ -315,7 +315,7 @@ class U1Backend(Backend):
             if _orig_dtype == torch.bfloat16:
                 self._model.to(_orig_dtype)
 
-            # Debug: log output tensor stats
+        # Debug: log output tensor stats
             with open("/tmp/u1_tensor_debug.txt", "w") as _dbg:
                 _dbg.write(f"type={type(output)}\n")
                 if hasattr(output, 'shape'):
@@ -325,12 +325,8 @@ class U1Backend(Backend):
                     _dbg.write(f"max={output.max().item()}\n")
                     _dbg.write(f"mean={output.mean().item()}\n")
                     _dbg.write(f"nan={torch.isnan(output).sum().item()}\n")
-                    _dbg.write(f"inf={torch.isinf(output).sum().item()}\n")
 
             # Convert generated tensor to PIL image.
-            # it2i_generate returns a bfloat16 tensor; numpy doesn't support
-            # bfloat16, so we MUST cast to float32 before .numpy().
-            # (Official U1 _to_pil does the same: batch.float().cpu().numpy())
             if isinstance(output, torch.Tensor):
                 image_tensor = output.float().clamp(-1, 1) * 0.5 + 0.5
                 image_tensor = image_tensor.cpu().squeeze(0)
@@ -340,11 +336,5 @@ class U1Backend(Backend):
                 pil_image = output
             else:
                 raise RuntimeError(f"it2i_generate returned unexpected type: {type(output)}")
-        except Exception as e:
-            _tb_str = ''.join(_tb.format_tb(e.__traceback__))
-            with open("/tmp/u1_error.txt", "w") as f:
-                f.write(f"[U1 DRAW ERROR] {e}\n{_tb_str}\n")
-            print(f"[U1 draw ERROR] {e}\n{_tb_str}", file=sys.stderr, flush=True)
-            raise
 
         return pil_image
