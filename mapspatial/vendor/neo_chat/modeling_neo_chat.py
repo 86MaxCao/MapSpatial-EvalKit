@@ -1687,16 +1687,7 @@ class NEOChatModel(PreTrainedModel):
         indexes = self.get_thw_indexes(input_ids[0], grid_hw)
         attention_mask = create_block_causal_mask(indexes[0])
 
-        # nn.Embedding lookup doesn't support bfloat16 in aten::embedding;
-        # temporarily cast weight to float32, then cast result back
-        embed_layer = self.language_model.get_input_embeddings()
-        _orig_w = embed_layer.weight.data
-        if _orig_w.dtype == torch.bfloat16:
-            embed_layer.weight.data = _orig_w.float()
-        input_embeds = embed_layer(input_ids)
-        if _orig_w.dtype == torch.bfloat16:
-            embed_layer.weight.data = _orig_w
-            input_embeds = input_embeds.to(_orig_w.dtype)
+        input_embeds = self.language_model.get_input_embeddings()(input_ids)
         B, N, C = input_embeds.shape
         if pixel_values is not None:
             vit_embeds = self.extract_feature(pixel_values, grid_hw=grid_hw)
@@ -1722,10 +1713,8 @@ class NEOChatModel(PreTrainedModel):
 
     def _t2i_predict_v(self, input_embeds, indexes_image, past_key_values, t, z, image_token_num, image_size=None):
         B, L = z.shape[0], z.shape[1]
-        # Cast input to LLM dtype (bfloat16), output to float32 for fm_head
-        llm_dtype = next(self.language_model.parameters()).dtype
         outputs = self.language_model.model(
-            inputs_embeds=input_embeds.to(llm_dtype),
+            inputs_embeds=input_embeds,
             image_gen_indicators=torch.ones(
                 (input_embeds.shape[0], input_embeds.shape[1]), dtype=torch.bool, device=input_embeds.device
             ),
@@ -1736,21 +1725,17 @@ class NEOChatModel(PreTrainedModel):
             use_cache=True,
         )
 
-        # Cast LLM output to float32 for fm_head
-        hidden = outputs.last_hidden_state[:, -image_token_num:].view(B, L, -1).float()
-        t_float = t.float() if t.dtype != torch.float32 else t
-
         if self.use_deep_fm_head:
             x_pred = self.fm_modules["fm_head"](
-                hidden, t_float.repeat(B * L)
+                outputs.last_hidden_state[:, -image_token_num:].view(B * L, -1), t.repeat(B * L)
             ).view(B, L, -1)
         else:
             x_pred = self.fm_modules["fm_head"](
-                hidden
+                outputs.last_hidden_state[:, -image_token_num:].view(B, L, -1)
             ).view(B, L, -1)
 
-        v_pred = (x_pred - z.float()) / (1 - t_float).clamp_min(self.t_eps)
-        return v_pred.to(z.dtype)
+        v_pred = (x_pred - z) / (1 - t).clamp_min(self.t_eps)
+        return v_pred
 
     @torch.no_grad()
     def it2i_generate(
@@ -1881,14 +1866,6 @@ class NEOChatModel(PreTrainedModel):
         device = hidden_cond.device
         dtype = hidden_cond.dtype
 
-        # Cast non-ViT fm_modules to float32 (some ops don't support bfloat16)
-        # Keep vision_model_mot_gen in bfloat16 (handles it internally)
-        _orig_fm_dtypes = {}
-        for _name, _module in self.fm_modules.items():
-            if _name != "vision_model_mot_gen":
-                _orig_fm_dtypes[_name] = next(_module.parameters()).dtype
-                _module.float()
-
         del pixel_values, grid_hw
         del input_embeds_condition, indexes_condition, attn_mask_condition
         if input_embeds_img_cond is not None:
@@ -1949,9 +1926,9 @@ class NEOChatModel(PreTrainedModel):
             image_input = self.patchify(image_prediction, self.patch_size, channel_first=True)
             image_embeds = self.extract_feature(
                 image_input.view(batch_size * grid_h * grid_w, -1), gen_model=True, grid_hw=gen_grid_hw
-            ).view(batch_size, img_tokens, -1).float()
+            ).view(batch_size, img_tokens, -1)
             t_expanded = t.expand(batch_size * img_tokens)
-            timestep_embeddings = self.fm_modules["timestep_embedder"](t_expanded).view(batch_size, img_tokens, -1).float()
+            timestep_embeddings = self.fm_modules["timestep_embedder"](t_expanded).view(batch_size, img_tokens, -1)
             if self.add_noise_scale_embedding:
                 ns_tensor = torch.full_like(t_expanded, noise_scale / self.noise_scale_max_value)
                 noise_emb = self.fm_modules["noise_scale_embedder"](ns_tensor).view(batch_size, img_tokens, -1)
@@ -1967,7 +1944,6 @@ class NEOChatModel(PreTrainedModel):
             elif cfg_scale == 1 and img_cfg_scale == 1:
                 v_pred = out_cond
             elif img_cfg_scale == 1:
-                # Text CFG: use image-conditioned (text-unconditioned) branch
                 out_img_cond = self._t2i_predict_v(
                     image_embeds, indexes_image_img_cond, past_kv_img_cond, t, z,
                     image_token_num=img_tokens, image_size=image_size,
@@ -2013,10 +1989,5 @@ class NEOChatModel(PreTrainedModel):
             clear_flash_kv_cache(past_kv_img_cond)
         if past_kv_uncond is not None:
             clear_flash_kv_cache(past_kv_uncond)
-
-        # Restore fm_modules to original dtype
-        for _name, _dt in _orig_fm_dtypes.items():
-            if _dt != torch.float32:
-                self.fm_modules[_name].to(_dt)
 
         return image_prediction
