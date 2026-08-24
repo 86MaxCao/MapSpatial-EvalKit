@@ -326,24 +326,24 @@ class U1Backend(Backend):
 
         # Debug: log output tensor stats
         with open("/tmp/u1_tensor_debug.txt", "w") as _dbg:
-                _dbg.write(f"type={type(output)}\n")
-                if hasattr(output, 'shape'):
-                    _dbg.write(f"shape={output.shape}\n")
-                    _dbg.write(f"dtype={output.dtype}\n")
-                    _dbg.write(f"min={output.min().item()}\n")
-                    _dbg.write(f"max={output.max().item()}\n")
-                    _dbg.write(f"mean={output.mean().item()}\n")
-                    _dbg.write(f"nan={torch.isnan(output).sum().item()}\n")
+            _dbg.write(f"type={type(output)}\n")
+            if hasattr(output, 'shape'):
+                _dbg.write(f"shape={output.shape}\n")
+                _dbg.write(f"dtype={output.dtype}\n")
+                _dbg.write(f"min={output.min().item()}\n")
+                _dbg.write(f"max={output.max().item()}\n")
+                _dbg.write(f"mean={output.mean().item()}\n")
+                _dbg.write(f"nan={torch.isnan(output).sum().item()}\n")
 
-            # Convert generated tensor to PIL image.
-            if isinstance(output, torch.Tensor):
-                image_tensor = output.float().clamp(-1, 1) * 0.5 + 0.5
-                image_tensor = image_tensor.cpu().squeeze(0)
-                image_np = (image_tensor.permute(1, 2, 0).numpy() * 255).round().astype("uint8")
-                pil_image = Image.fromarray(image_np)
-            elif isinstance(output, Image.Image):
-                pil_image = output
-            else:
-                raise RuntimeError(f"it2i_generate returned unexpected type: {type(output)}")
+        # Convert generated tensor to PIL image.
+        if isinstance(output, torch.Tensor):
+            image_tensor = output.float().clamp(-1, 1) * 0.5 + 0.5
+            image_tensor = image_tensor.cpu().squeeze(0)
+            image_np = (image_tensor.permute(1, 2, 0).numpy() * 255).round().astype("uint8")
+            pil_image = Image.fromarray(image_np)
+        elif isinstance(output, Image.Image):
+            pil_image = output
+        else:
+            raise RuntimeError(f"it2i_generate returned unexpected type: {type(output)}")
 
         return pil_image
