@@ -289,6 +289,16 @@ class U1Backend(Backend):
         if _orig_dtype == torch.bfloat16:
             self._model.float()
 
+        # Verify .float() actually worked
+        _verify_dtype = next(self._model.parameters()).dtype
+        with open("/tmp/u1_dtype_check.txt", "w") as _dc:
+            _dc.write(f"orig: {_orig_dtype}\n")
+            _dc.write(f"after .float(): {_verify_dtype}\n")
+            _dc.write(f"language_model: {next(self._model.language_model.parameters()).dtype}\n")
+            _dc.write(f"fm_head: {next(self._model.fm_modules['fm_head'].parameters()).dtype}\n")
+            _dc.write(f"vision_model: {next(self._model.vision_model.parameters()).dtype}\n")
+            _dc.write(f"vision_model_mot_gen: {next(self._model.fm_modules['vision_model_mot_gen'].parameters()).dtype}\n")
+
         import sys, traceback as _tb
         try:
             with torch.inference_mode():
@@ -311,12 +321,11 @@ class U1Backend(Backend):
                 f.write(f"[U1 DRAW ERROR] {e}\n{_tb_str}\n")
             raise
         finally:
-            # Restore to original dtype
             if _orig_dtype == torch.bfloat16:
                 self._model.to(_orig_dtype)
 
         # Debug: log output tensor stats
-            with open("/tmp/u1_tensor_debug.txt", "w") as _dbg:
+        with open("/tmp/u1_tensor_debug.txt", "w") as _dbg:
                 _dbg.write(f"type={type(output)}\n")
                 if hasattr(output, 'shape'):
                     _dbg.write(f"shape={output.shape}\n")
