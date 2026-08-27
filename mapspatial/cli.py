@@ -43,6 +43,7 @@ def cmd_run(args: argparse.Namespace) -> None:
         allow_missing=args.allow_missing,
         store_question=args.store_question,
         no_save_generated=args.no_save_generated,
+        no_system_prompt=args.no_system_prompt,
         rank=rank,
         world_size=world_size,
     )
@@ -249,6 +250,12 @@ def main():
     p_run.add_argument("--allow-missing", type=int, default=0, help="Allow N missing images")
     p_run.add_argument("--store-question", action="store_true", help="Store question text in results")
     p_run.add_argument("--no-save-generated", action="store_true", help="Don't save generated images")
+    p_run.add_argument(
+        "--no-system-prompt",
+        action="store_true",
+        help="Don't inject the benchmark record's system_prompt (e.g. for think runs, "
+        "where 'return only the option letter, no explanation' conflicts with CoT)",
+    )
     p_run.set_defaults(func=cmd_run)
 
     # preflight

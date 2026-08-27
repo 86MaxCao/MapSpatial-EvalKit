@@ -22,5 +22,11 @@ backend_args:
   top_k: 50
   top_p: 0.95
   decoder_path: ${CKPT_DIR}/LatentUM-Decoder
+  # forced_interleave: inject the image phase after N text tokens of round 1
+  # (or at EOS) — base LatentUM never emits <img> on general reasoning prompts
+  force_image_at: 96
 
-strategies: [direct, external_draw, native_interleave]
+# native_interleave intentionally NOT registered: base LatentUM never emits
+# '<img>' on general reasoning (0/400 measured); forced_interleave is the
+# supported interleave path for this checkpoint.
+strategies: [direct, external_draw, forced_interleave]

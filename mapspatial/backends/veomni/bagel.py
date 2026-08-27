@@ -167,6 +167,10 @@ class BagelBackend(Backend):
         # System prompt
         self._system_prompt = cfg.system_prompt or None
 
+        # think_mode: route understand() through the inferencer with
+        # think=True + understanding_output=True (official VLM think path)
+        self._think_mode = ba.get("think_mode", False)
+
     @property
     def model_name(self) -> str:
         return self._cfg.name
@@ -217,7 +221,9 @@ class BagelBackend(Backend):
         return results
 
     def _understand_one(self, msg: Message, gen_kw: dict) -> str:
-        """Single-sample understanding via model.chat()."""
+        """Single-sample understanding; model.chat() when think is off."""
+        if self._think_mode:
+            return self._understand_one_think(msg, gen_kw)
 
         # Ensure new_token_ids tensor values are on model device
         nti = self._new_token_ids
@@ -257,6 +263,27 @@ class BagelBackend(Backend):
                 max_length=gen_kw.get("max_new_tokens", 512),
             )
         return response
+
+    def _understand_one_think(self, msg: Message, gen_kw: dict) -> str:
+        """Think-mode understanding, mirroring official Bagel:
+        interleave_inference(think=True, understanding_output=True) injects
+        VLM_THINK_SYSTEM_PROMPT; the model reasons in <think>...</think>
+        before answering. Images are encoded with the ViT only (vae=False).
+        """
+        inferencer = self._get_inferencer()
+        input_list = to_interleave_list(msg)
+        with torch.no_grad():
+            output = inferencer.interleave_inference(
+                input_lists=input_list,
+                think=True,
+                understanding_output=True,
+                max_think_token_n=gen_kw.get("max_think_tokens", self._max_think_tokens),
+                do_sample=gen_kw.get("temperature", self._temperature) > 0,
+                text_temperature=gen_kw.get("temperature", self._temperature) or 1.0,
+                image_shapes=self._image_shapes,
+                max_rounds=1,
+            )
+        return "\n".join(x for x in output if isinstance(x, str))
 
     def draw(self, context: Message, instruction: str, **kw) -> "Image.Image":
         """Generate an intermediate image using forced interleave.

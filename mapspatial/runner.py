@@ -248,7 +248,7 @@ def run(
             (s.meta["system_prompt"] for s in samples if s.meta.get("system_prompt")),
             None,
         )
-        if cell_system_prompt:
+        if cell_system_prompt and not cfg.no_system_prompt:
             ctx.gen_kw = {**gen_kw, "system_prompt": cell_system_prompt}
         else:
             ctx.gen_kw = gen_kw

@@ -1,0 +1,26 @@
+# SenseNova-U1-8B-MoT with think_mode=True (reasoning before answer).
+# Same weights as sensenova-u1-8b.yaml; used to isolate the effect of
+# think-style reasoning from the effect of generated-image evidence
+# (forced_interleave runs think_mode=True, so baselines must too).
+name: SenseNova-U1-8B-MoT
+backend: veomni_u1
+model_path: ${CKPT_DIR}/SenseNova-U1-8B-MoT
+
+load:
+  dtype: bfloat16
+  device: cuda
+
+generate:
+  temperature: 0.0
+  # think reasoning needs budget; 512 truncates long thinks mid-way
+  max_new_tokens: 2048
+
+backend_args:
+  think_mode: true
+  cfg_scale: 4.0
+  img_cfg_scale: 1.0
+  num_steps: 30
+  image_size: [256, 256]
+  force_image_at: 256
+
+strategies: [direct, external_draw, forced_interleave]

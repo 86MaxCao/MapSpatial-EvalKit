@@ -1,0 +1,30 @@
+# Bagel-7B-MoT with think_mode=True — understand() routes through
+# InterleaveInferencer(think=True, understanding_output=True), the official
+# VLM think path (VLM_THINK_SYSTEM_PROMPT, reasoning in <think>...</think>).
+# Same weights as bagel-7b.yaml; used to measure think on pure MM understanding.
+name: Bagel-7B-MoT
+backend: veomni_bagel
+model_path: ${CKPT_DIR}/BAGEL-7B-MoT
+
+load:
+  dtype: bfloat16
+  device: cuda
+
+generate:
+  temperature: 0.0
+  max_new_tokens: 4096
+  max_think_tokens: 4096
+
+backend_args:
+  think_mode: true
+  cfg_text_scale: 4.0
+  cfg_img_scale: 2.0
+  num_timesteps: 50
+  timestep_shift: 3.0
+  cfg_interval: [0.4, 1.0]
+  cfg_renorm_type: global
+  cfg_renorm_min: 0.0
+  image_shapes: [1024, 1024]
+  max_rounds: 3
+
+strategies: [direct, native_interleave, external_draw, forced_interleave]

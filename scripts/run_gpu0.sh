@@ -11,8 +11,9 @@ MODELS=(                         # model configs: yaml name (configs/models/<nam
   "step3-vl-10b"                 # vLLM (glm url-style, new)
   "mimo-embodied-7b"             # transformers
 )
+INPUT_DIR="/home/ximeng.czq/caoziqi/code/SpatialIntelligence/SpatialIntelligence-gate2building/data/benchmark_jsonl"  # input jsonl dir
 VIEWS="blank,sat,webrd04,wprd01"               # comma-separated tile types, e.g. sat,wprd01
-TASKS="t1,t2"                    # comma-separated tasks, e.g. t1,t2
+TASKS="t3,t4,t1,t2"                    # comma-separated tasks, e.g. t1,t2
 VARIANTS=(                       # paper-v8 layout: base + 7 transforms × direct/oracle
   "base/direct"
   "base/oracle"
@@ -30,6 +31,10 @@ VARIANTS=(                       # paper-v8 layout: base + 7 transforms × direc
   "transform/mirror_h_rot180/oracle"
   "transform/mirror_h_rot270/direct"
   "transform/mirror_h_rot270/oracle"
+  "world/intervention_001/direct"
+  "world/intervention_001/oracle"
+  "world/sham_001/direct"
+  "world/sham_001/oracle"
 )
 VARIANTS="$(IFS=,; echo "${VARIANTS[*]}")"  # join array into comma-string
 # ────────────────────────────────────────────────────────────────────────
@@ -40,6 +45,7 @@ for MODEL in "${MODELS[@]}"; do
     bash "${RUN_BENCH}" \
         "$MODEL" \
         --gpu 0 \
+        --input-dir "$INPUT_DIR" \
         --views "$VIEWS" \
         --tasks "$TASKS" \
         --variants "$VARIANTS" \

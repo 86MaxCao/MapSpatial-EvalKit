@@ -123,8 +123,25 @@ def _normalize_letters(match_str: str) -> str:
 
 
 def _strip_think(text: str) -> str:
-    """Remove <think>...</think> blocks from text."""
-    return _THINK_RE.sub("", text)
+    """Remove <think>...</think> blocks from text.
+
+    Also handles prefilled thinking: when the prompt ends with <think>
+    (think_mode=True), the response contains only the closing </think> —
+    strip everything up to and including it, or the reasoning (which often
+    quotes every option's text verbatim) leaks into extraction.
+    """
+    text = _THINK_RE.sub("", text)
+    if "<think>" not in text and "</think>" in text:
+        # Prefilled think (opening tag was in the prompt): the final answer
+        # follows the LAST closing tag — models sometimes emit extra
+        # analysis segments each closed with a spurious </think>.
+        text = text.rsplit("</think>", 1)[1]
+    elif "<think>" in text and "</think>" not in text:
+        # Unclosed think (reasoning hit the token budget and never produced
+        # an answer): drop it, or option_text may match verbatim option
+        # quotes inside the reasoning and fabricate a wrong answer.
+        text = text.split("<think>", 1)[0]
+    return text
 
 
 def _get_valid_letters(sample_meta: dict | None = None) -> str | None:

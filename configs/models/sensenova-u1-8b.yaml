@@ -16,5 +16,11 @@ backend_args:
   img_cfg_scale: 1.0
   num_steps: 30
   image_size: [256, 256]
+  # forced_interleave: inject <img> after N reasoning tokens (think_mode on)
+  # — U1 does not emit <img> under VQA-style prompts (0% native draw rate)
+  force_image_at: 256
 
-strategies: [direct, external_draw, native_interleave]
+# native_interleave intentionally NOT registered: U1 does not emit '<img>'
+# under VQA-style prompts (0% draw rate measured); forced_interleave is the
+# supported interleave path for this checkpoint.
+strategies: [direct, external_draw, forced_interleave]

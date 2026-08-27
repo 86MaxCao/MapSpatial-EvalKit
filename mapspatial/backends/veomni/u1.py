@@ -54,7 +54,11 @@ class U1Backend(Backend):
     caps: ClassVar[Capabilities] = Capabilities(
         batch=False,            # serial loop, one sample at a time
         draw=True,              # it2i_generate for image generation
-        native_interleave=True,
+        # Native marker-driven interleave does not fire under MapSpatial
+        # VQA-style prompts (model answers directly, 0% draw rate). The
+        # interleave() engine below is kept as the vehicle for
+        # forced_interleave(); do not register native_interleave.
+        native_interleave=False,
         max_images=24,
         video=False,
     )
@@ -308,6 +312,10 @@ class U1Backend(Backend):
             if _orig_dtype == torch.bfloat16:
                 self._model.to(_orig_dtype)
 
+        # think_mode=True returns (image, think_text); the image is what we draw
+        if isinstance(output, tuple):
+            output = output[0]
+
         # Convert generated tensor to PIL image.
         if isinstance(output, torch.Tensor):
             image_tensor = output.float().clamp(-1, 1) * 0.5 + 0.5
@@ -331,13 +339,19 @@ class U1Backend(Backend):
         *,
         max_rounds: int = 3,
         marker: str = "<image>",
+        force_image_at: int = 0,
         **kw,
     ) -> Prediction:
-        """Native interleaved text + image generation via model.interleave_gen().
+        """Interleaved text + image generation via model.interleave_gen().
 
-        The model generates text autoregressively; when it emits <img>,
-        flow-matching image generation kicks in, the result is re-encoded
-        back into the KV cache, and text generation continues.
+        NOTE: with ``force_image_at=0`` this is the marker-driven (native)
+        mode, which does not fire under MapSpatial VQA-style prompts — it is
+        kept only as the engine for ``forced_interleave()`` and is not
+        registered as a strategy (caps.native_interleave=False).
+
+        When <img> is emitted (or injected), flow-matching image generation
+        kicks in, the result is re-encoded back into the KV cache, and text
+        generation continues.
 
         dtype handling mirrors draw(): model is temporarily cast to float32
         to avoid NaN in the flow-matching denoising loop, then restored.
@@ -382,6 +396,7 @@ class U1Backend(Backend):
                     seed=seed,
                     think_mode=think_mode,
                     max_images=max_rounds,
+                    force_image_at=force_image_at,
                 )
         finally:
             if _orig_dtype == torch.bfloat16:
@@ -419,7 +434,7 @@ class U1Backend(Backend):
                 trace.append(TraceStep(
                     round=round_num,
                     kind="image",
-                    triggered_by="model_marker",
+                    triggered_by="forced" if (force_image_at > 0 and img_idx == 0) else "model_marker",
                     elapsed_s=elapsed_per,
                 ))
                 # PIL image stored in the image field via generated_images
@@ -435,4 +450,32 @@ class U1Backend(Backend):
                 "draw_triggered": len(pil_generated) > 0,
                 "backend": self.model_name,
             },
+        )
+
+    def forced_interleave(
+        self,
+        message: Message,
+        *,
+        max_rounds: int = 1,
+        force_image_at: int | None = None,
+        **kw,
+    ) -> Prediction:
+        """Forced interleaved reasoning — no marker needed.
+
+        U1 rarely emits '<img>' under MapSpatial VQA-style prompts (native
+        interleave measured 0% draw rate), so the marker is injected after
+        ``force_image_at`` reasoning tokens (or at EOS) of the first round
+        and the shared-KV flow continues to the final answer.
+
+        think_mode defaults to True here so the model produces reasoning
+        text before the forced image instead of an immediate answer.
+        """
+        if force_image_at is None:
+            force_image_at = int(self._cfg.backend_args.get("force_image_at", 256))
+        kw.setdefault("think_mode", True)
+        return self.interleave(
+            message,
+            max_rounds=max_rounds,
+            force_image_at=force_image_at,
+            **kw,
         )

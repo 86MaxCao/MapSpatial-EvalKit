@@ -1717,6 +1717,56 @@ class NEOChatModel(PreTrainedModel):
         )
         return out.past_key_values, out.last_hidden_state
 
+    def _append_text_tokens_to_cache(self, cache, t_idx, input_ids):
+        # Feed text tokens one at a time (single-token steps need no attn mask,
+        # same convention as the interleave_gen text loop).
+        for j in range(input_ids.shape[1]):
+            tok = input_ids[:, j]
+            new_indexes = torch.tensor([[t_idx], [0], [0]], device=tok.device, dtype=torch.long)
+            self.language_model(
+                input_ids=tok.unsqueeze(0),
+                indexes=new_indexes,
+                past_key_values=cache,
+                use_cache=True,
+            )
+            t_idx += 1
+        return t_idx
+
+    def _generate_think(self, tokenizer, prefix_outputs, past_key_values, t_idx, IMG_START_TOKEN, max_think_tokens=1024):
+        # Ported from official modeling_neo_chat._generate_think: generate
+        # reasoning text after a '<think>\n' prefill until '</think>' or EOS,
+        # then append '\n\n<img>' so the image V-tokens follow the img marker.
+        eos_token_id = tokenizer.convert_tokens_to_ids("<|im_end|>")
+        think_end_token_id = tokenizer.convert_tokens_to_ids("</think>")
+        think_token_ids = []
+        next_token = torch.argmax(prefix_outputs.logits[:, -1, :], dim=-1)
+
+        for _ in range(max_think_tokens):
+            token_item = next_token.item()
+            if token_item == eos_token_id:
+                break
+            think_token_ids.append(token_item)
+            new_indexes = torch.tensor([[t_idx], [0], [0]], device=self.device, dtype=torch.long)
+            outputs = self.language_model(
+                input_ids=next_token.unsqueeze(0),
+                indexes=new_indexes,
+                past_key_values=past_key_values,
+                use_cache=True,
+            )
+            past_key_values = outputs.past_key_values
+            t_idx += 1
+            next_token = torch.argmax(outputs.logits[:, -1, :], dim=-1)
+            if token_item == think_end_token_id:
+                break
+
+        append_ids = tokenizer(
+            "\n\n" + IMG_START_TOKEN, return_tensors="pt", add_special_tokens=False
+        )["input_ids"].to(self.device)
+        t_idx = self._append_text_tokens_to_cache(past_key_values, t_idx, append_ids)
+
+        think_text = tokenizer.decode(think_token_ids, skip_special_tokens=False)
+        return past_key_values, t_idx, think_text
+
     def _t2i_predict_v(self, input_embeds, indexes_image, past_key_values, t, z, image_token_num, attn_mask=None, timestep_embeddings=None, image_size=None):
         B, L = z.shape[0], z.shape[1]
         outputs = self.language_model.model(
@@ -1854,10 +1904,34 @@ class NEOChatModel(PreTrainedModel):
             else None
         )
 
-        # Prefill KV caches
-        past_kv_cond, hidden_cond = self._it2i_prefix_forward(
-            input_embeds_condition, indexes_condition, attn_mask_condition
-        )
+        # Prefill KV caches. In think_mode the condition prefix ends with
+        # '<think>\n' and the model must first generate its reasoning text
+        # (official behavior) — otherwise the diffusion condition is an
+        # out-of-distribution prefix and decodes to a black image.
+        think_text = ""
+        if think_mode:
+            outputs_cond = self.language_model(
+                inputs_embeds=input_embeds_condition,
+                indexes=indexes_condition,
+                attention_mask=attn_mask_condition,
+                past_key_values=DynamicCache(),
+                use_cache=True,
+            )
+            past_kv_cond = outputs_cond.past_key_values
+            # hidden_cond is only used downstream for device/dtype
+            hidden_cond = outputs_cond.logits
+            t_index_cond = indexes_condition[0].max().item()
+            past_kv_cond, t_index_cond, think_text = self._generate_think(
+                tokenizer, outputs_cond, past_kv_cond, t_index_cond, IMG_START_TOKEN
+            )
+            # Image V-tokens start after the generated think text + <img>
+            indexes_image_cond = self._build_t2i_image_indexes(
+                token_h, token_w, t_index_cond + 1, device=self.device
+            )
+        else:
+            past_kv_cond, hidden_cond = self._it2i_prefix_forward(
+                input_embeds_condition, indexes_condition, attn_mask_condition
+            )
         past_kv_img_cond = None
         if input_embeds_img_cond is not None:
             past_kv_img_cond, _ = self._it2i_prefix_forward(
@@ -1996,6 +2070,8 @@ class NEOChatModel(PreTrainedModel):
         if past_kv_uncond is not None:
             clear_flash_kv_cache(past_kv_uncond)
 
+        if think_mode:
+            return image_prediction, think_text
         return image_prediction
 
     # ------------------------------------------------------------------
@@ -2027,6 +2103,7 @@ class NEOChatModel(PreTrainedModel):
         system_message=SYSTEM_MESSAGE_FOR_GEN,
         think_mode=False,
         seed=0,
+        force_image_at=0,
     ):
         """Interleaved text + image generation.
 
@@ -2113,11 +2190,16 @@ class NEOChatModel(PreTrainedModel):
             tokenizer, query_cond, pv_tensor, ghw_tensor
         )
 
-        # Prefix forward through language_model (returns logits + past_key_values)
+        # Prefix forward through language_model (returns logits + past_key_values).
+        # NOTE: unlike official (HF Qwen3 auto-creates a cache when use_cache=True),
+        # the vendored Qwen3Model returns the *input* cache object — so a fresh
+        # DynamicCache must be passed in explicitly (same as _it2i_prefix_forward).
+        past_key_values_cond = DynamicCache()
         outputs_cond = self.language_model(
             inputs_embeds=input_embeds_cond,
             indexes=indexes_cond,
             attention_mask=attn_mask_cond,
+            past_key_values=past_key_values_cond,
             use_cache=True,
         )
         past_key_values_cond = outputs_cond.past_key_values
@@ -2135,6 +2217,7 @@ class NEOChatModel(PreTrainedModel):
             inputs_embeds=input_embeds_tu,
             indexes=indexes_tu,
             attention_mask=attn_mask_tu,
+            past_key_values=DynamicCache(),
             use_cache=True,
         )
         past_key_values_tu = outputs_tu.past_key_values
@@ -2149,6 +2232,7 @@ class NEOChatModel(PreTrainedModel):
             inputs_embeds=input_embeds_iu,
             indexes=indexes_iu,
             attention_mask=attn_mask_iu,
+            past_key_values=DynamicCache(),
             use_cache=True,
         )
         past_key_values_iu = outputs_iu.past_key_values
@@ -2198,6 +2282,18 @@ class NEOChatModel(PreTrainedModel):
                     hit_max_tokens = True
                     break
 
+                if (
+                    force_image_at > 0
+                    and img_count == 0
+                    and len(gen_tokens) >= force_image_at
+                ):
+                    # Forced interleave: inject <img> as if the model had
+                    # emitted it; the image branch below runs unchanged.
+                    next_token = torch.tensor(
+                        [self.img_start_token_id], device=self.device, dtype=torch.long
+                    )
+                    break
+
             if len(gen_tokens) > 0:
                 chunk_text = tokenizer.decode(gen_tokens, skip_special_tokens=True)
                 generated_text += chunk_text
@@ -2207,7 +2303,14 @@ class NEOChatModel(PreTrainedModel):
                         print(remaining, end="", flush=True)
 
             if next_token.item() == eos_token_id or hit_max_tokens:
-                break
+                if force_image_at > 0 and img_count == 0 and not hit_max_tokens:
+                    # Model ended its reasoning without emitting <img>;
+                    # force one image round anyway (forced interleave).
+                    next_token = torch.tensor(
+                        [self.img_start_token_id], device=self.device, dtype=torch.long
+                    )
+                else:
+                    break
 
             if next_token.item() == self.img_start_token_id:
                 if img_count >= max_images:
@@ -2421,7 +2524,10 @@ class NEOChatModel(PreTrainedModel):
                 img_count += 1
 
                 # --- Re-encode the generated image using the understanding ViT ---
-                pred_img = image_prediction[0].unsqueeze(0).to(torch.bfloat16)
+                # Use self.dtype (not hardcoded bf16): the backend casts the
+                # whole model to float32 for generation to avoid NaN, so the
+                # ViT weights follow self.dtype.
+                pred_img = image_prediction[0].unsqueeze(0).to(self.dtype)
                 raw_img = pred_img * 0.5 + 0.5
                 img_mean = torch.tensor(
                     [0.485, 0.456, 0.406], dtype=raw_img.dtype, device=device

@@ -43,6 +43,8 @@ run_api.sh
 # Generated results
 results/
 results_draw/
+results_think/
+results_tmp*/
 
 # Qoder CLI config
 .qoder/

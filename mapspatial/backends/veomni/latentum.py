@@ -34,7 +34,11 @@ class LatentUMBackend(Backend):
     caps: ClassVar[Capabilities] = Capabilities(
         batch=False,
         draw=True,
-        native_interleave=True,
+        # Native marker-driven interleave NEVER fires for this checkpoint on
+        # general reasoning prompts (measured 0/400 on MapSpatial t1): the
+        # base model only learned to emit '<img>' in FrozenLake-style
+        # planning training. Use forced_interleave instead.
+        native_interleave=False,
         max_images=24,
         video=False,
     )
@@ -275,9 +279,15 @@ class LatentUMBackend(Backend):
         *,
         max_rounds: int = 3,
         marker: str = "<img>",
+        force_image_at: int = 0,
         **kw,
     ) -> Prediction:
-        """Native interleaved reasoning loop using the save-rewind-reinject pattern.
+        """Interleaved reasoning loop using the save-rewind-reinject pattern.
+
+        NOTE: with ``force_image_at=0`` this is the marker-driven (native)
+        mode, which never triggers for this checkpoint on general reasoning
+        prompts — it is kept only as the engine for ``forced_interleave()``
+        and is not registered as a strategy (caps.native_interleave=False).
 
         Based on the official FrozenLakePlanner.generate() method:
         1. Pre-fill prompt through LLM (vision_token_mask=0, use_cache=True)
@@ -407,6 +417,7 @@ class LatentUMBackend(Backend):
             round_idx += 1
             step_tokens: list[int] = []
             found_img = False
+            forced_this_round = False
             t_round = time.time()
 
             # -- AR text generation -------------------------------------------
@@ -435,7 +446,38 @@ class LatentUMBackend(Backend):
                     found_img = True
                     break
 
-                if next_id == eos_id:
+                # Forced mode: model never learned to emit <img> in general
+                # reasoning, so inject the image phase after force_image_at
+                # text tokens (or at EOS) of round 1.
+                force_img = (
+                    force_image_at > 0
+                    and round_idx == 1
+                    and (next_id == eos_id or len(step_tokens) >= force_image_at)
+                )
+                if next_id == eos_id and not force_img:
+                    break
+
+                if force_img:
+                    # Keep text and KV cache aligned: the pending token was
+                    # never forwarded, so drop it (eos stays appended and is
+                    # stripped by skip_special_tokens at decode time).
+                    if next_id != eos_id:
+                        step_tokens.pop()
+                        all_tokens.pop()
+                    kv_before_img = deepcopy(past_key_values)
+                    img_embed = internvl.language_model.get_input_embeddings()(
+                        torch.tensor([[img_start_id]], device=device)
+                    )
+                    outputs = internvl.language_model.model(
+                        inputs_embeds=img_embed,
+                        past_key_values=past_key_values,
+                        vision_token_mask=torch.ones(1, 1, device=device, dtype=dtype),
+                        use_cache=True,
+                    )
+                    past_key_values_phase2 = deepcopy(outputs.past_key_values)
+                    base_hidden = outputs.last_hidden_state
+                    found_img = True
+                    forced_this_round = True
                     break
 
                 # Feed next text token (vision_token_mask=0)
@@ -458,7 +500,7 @@ class LatentUMBackend(Backend):
                 round=round_idx,
                 kind="text",
                 text=text_content,
-                triggered_by="model_marker" if found_img else None,
+                triggered_by=("forced" if forced_this_round else "model_marker") if found_img else None,
                 elapsed_s=text_elapsed,
             ))
 
@@ -539,7 +581,7 @@ class LatentUMBackend(Backend):
             trace_steps.append(TraceStep(
                 round=round_idx,
                 kind="image",
-                triggered_by="model_marker",
+                triggered_by="forced" if forced_this_round else "model_marker",
                 elapsed_s=img_elapsed,
             ))
 
@@ -575,9 +617,36 @@ class LatentUMBackend(Backend):
             generated_images=generated_images,
             trace=trace_steps,
             meta={
-                "strategy": "native_interleave",
+                "strategy": "native_interleave" if force_image_at <= 0 else "forced_interleave",
                 "rounds": round_idx,
                 "draw_triggered": len(all_generated_codes) > 0,
                 "backend": self.model_name,
             },
+        )
+
+    def forced_interleave(
+        self,
+        message: Message,
+        *,
+        max_rounds: int = 3,
+        force_image_at: int | None = None,
+        **kw,
+    ) -> Prediction:
+        """Forced interleaved reasoning — no marker needed.
+
+        Base LatentUM was only trained to emit '<img>' in FrozenLake-style
+        planning prompts, so marker-driven interleave never triggers on
+        MapSpatial (measured 0/400 on t1). Here the first text round is
+        interrupted
+        after ``force_image_at`` tokens (or at EOS) and the image phase runs
+        unconditionally; text generation then resumes for the final answer,
+        all on the same KV cache.
+        """
+        if force_image_at is None:
+            force_image_at = int(self._cfg.backend_args.get("force_image_at", 96))
+        return self.interleave(
+            message,
+            max_rounds=max_rounds,
+            force_image_at=force_image_at,
+            **kw,
         )
