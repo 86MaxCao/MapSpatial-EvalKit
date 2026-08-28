@@ -34,6 +34,7 @@ class ThinkMorphBackend(BagelBackend):
         native_interleave=True,
         max_images=24,
         video=False,
+        forced_interleave=True,
     )
 
     def __init__(self, cfg: BackendConfig) -> None:

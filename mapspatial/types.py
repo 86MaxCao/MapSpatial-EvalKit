@@ -106,6 +106,7 @@ class Capabilities(NamedTuple):
     native_interleave: bool      # has native interleave loop (single KV-cache across rounds)
     max_images: int              # max images per single input
     video: bool
+    forced_interleave: bool = False  # same-call modality switch + reconsume + continue
 
 
 # ---------------------------------------------------------------------------
@@ -120,49 +121,64 @@ class RunContext:
     max_rounds: int = 3
     marker: str = "<image_start>"
     save_generated: bool = True
-    draw_followup_text: str = "Based on the intermediate image above, answer the question."
+    draw_followup_text: str = "Use the generated visual evidence to answer the original question."
+    generation_system_prompt: str = ""
+    g2u_seed: int = 42
     view: str = ""
     task: str = ""
     variant: str = ""
 
-    def draw_instruction(self, sample: TaskSample) -> str:
-        """Per-question_type draw instruction (for external_draw strategy).
+    @property
+    def understand_followup(self) -> str:
+        return self.draw_followup_text
 
-        Loads from configs/strategies/external_draw.yaml if available,
-        falls back to hardcoded _DRAW_INSTRUCTIONS.
-        """
+    def draw_instruction(self, sample: TaskSample) -> str:
+        """Per-question_type draw instruction (shared by C-R and C-F)."""
         qt = sample.meta.get("question_type", "")
-        # Try YAML config first (11 question types, more complete)
-        yaml_instructions = _load_draw_instructions_yaml()
+        yaml_instructions = _load_g2u_config().get("draw_instruction") or {}
         if qt in yaml_instructions:
             return yaml_instructions[qt]
         return _DRAW_INSTRUCTIONS.get(qt, "Draw a helpful intermediate diagram.")
 
+    def visual_generation_instruction(self, sample: TaskSample) -> str:
+        """G-stage instruction: shared system prompt + question-type draw text."""
+        parts = []
+        sys_p = (self.generation_system_prompt or _load_g2u_config().get("generation_system_prompt") or "").strip()
+        if sys_p:
+            parts.append(sys_p)
+        task = self.draw_instruction(sample).strip()
+        if task:
+            parts.append(task)
+        return "\n\n".join(parts)
 
-def _load_draw_instructions_yaml() -> dict[str, str]:
-    """Load draw_instruction from configs/strategies/external_draw.yaml.
 
-    Cached after first load. Returns empty dict if file not found.
-    """
-    global _YAML_DRAW_INSTRUCTIONS
-    if _YAML_DRAW_INSTRUCTIONS is not None:
-        return _YAML_DRAW_INSTRUCTIONS
+def _load_g2u_config() -> dict:
+    """Load configs/strategies/g2u.yaml, falling back to external_draw.yaml."""
+    global _G2U_CONFIG
+    if _G2U_CONFIG is not None:
+        return _G2U_CONFIG
     import os
-    yaml_path = os.path.join(
-        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-        "configs", "strategies", "external_draw.yaml",
-    )
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    g2u_path = os.path.join(root, "configs", "strategies", "g2u.yaml")
+    legacy_path = os.path.join(root, "configs", "strategies", "external_draw.yaml")
+    cfg: dict = {}
     try:
         import yaml
-        with open(yaml_path) as f:
-            cfg = yaml.safe_load(f)
-        _YAML_DRAW_INSTRUCTIONS = cfg.get("draw_instruction", {})
+        path = g2u_path if os.path.isfile(g2u_path) else legacy_path
+        with open(path) as f:
+            cfg = yaml.safe_load(f) or {}
     except Exception:
-        _YAML_DRAW_INSTRUCTIONS = {}
-    return _YAML_DRAW_INSTRUCTIONS
+        cfg = {}
+    _G2U_CONFIG = cfg
+    return _G2U_CONFIG
 
 
-_YAML_DRAW_INSTRUCTIONS: dict[str, str] | None = None
+def load_g2u_defaults() -> dict:
+    """Public helper for runner/strategy setup."""
+    return dict(_load_g2u_config())
+
+
+_G2U_CONFIG: dict | None = None
 
 
 _DRAW_INSTRUCTIONS: dict[str, str] = {

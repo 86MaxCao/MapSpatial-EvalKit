@@ -34,6 +34,21 @@ def test_capabilities():
                         max_images=24, video=False)
     assert caps.batch is True
     assert caps.max_images == 24
+    assert caps.forced_interleave is False
+
+
+def test_run_context_g2u_defaults():
+    ctx = RunContext(output_dir=Path("/tmp"))
+    assert ctx.g2u_seed == 42
+    assert ctx.understand_followup
+    sample = TaskSample(
+        id="x",
+        message=[{"type": "text", "value": "q"}],
+        gold="A",
+        meta={"question_type": "direction"},
+    )
+    inst = ctx.visual_generation_instruction(sample)
+    assert "arrow" in inst.lower() or "direction" in inst.lower()
 
 
 def test_task_sample_gold_isolation():

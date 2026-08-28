@@ -1,20 +1,14 @@
-"""External draw strategy — force generate an intermediate image, then answer.
+"""External draw strategy — image-first G2U with restart (C-R).
 
-Unlike native_interleave (model decides), this strategy ALWAYS generates
-an intermediate image first, then feeds it back to the model for answering.
-
-Context is lost between draw() and understand() — this is a known semantic
-difference from native_interleave (which preserves single KV-cache).
-
-The draw instruction is per-question_type, configurable via
-configs/strategies/external_draw.yaml.
-
-Intermediate image naming: {output_dir}/generated/{view}/{task}/{variant}/{sample_id}_r{round}.png
-Must contain sample_id (fixes ThinkMorph's uuid8+idx problem).
+draw() then understand() as two independent forwards. Does not change direct.
 """
 
 from __future__ import annotations
 
+import hashlib
+import os
+import tempfile
+import time
 from pathlib import Path
 from typing import Any
 
@@ -40,8 +34,13 @@ class ExternalDrawStrategy(Strategy):
                 pred = self._run_one(backend, s, ctx)
                 pred.meta.setdefault("strategy", "external_draw")
                 pred.meta.setdefault("backend", backend.model_name)
+                pred.meta.setdefault("protocol", "image_first_single_image")
+                pred.meta.setdefault("stateful", False)
                 pred.meta.setdefault("draw_triggered", True)
+                pred.meta.setdefault("visual_reinjected", True)
                 pred.meta.setdefault("rounds", 1)
+                pred.meta.setdefault("pre_image_text_tokens", 0)
+                pred.meta.setdefault("seed", ctx.g2u_seed)
                 results.append(pred)
             except Exception as e:
                 results.append(Prediction(
@@ -51,6 +50,7 @@ class ExternalDrawStrategy(Strategy):
                         "backend": backend.model_name,
                         "draw_triggered": False,
                         "rounds": 0,
+                        "protocol": "image_first_single_image",
                     },
                 ))
         return results
@@ -61,44 +61,47 @@ class ExternalDrawStrategy(Strategy):
         sample: TaskSample,
         ctx: RunContext,
     ) -> Prediction:
-        import time
+        instruction = ctx.visual_generation_instruction(sample)
+        followup_text = ctx.understand_followup
 
-        trace: list[TraceStep] = []
-
-        # 1) Force-generate an intermediate image
-        instruction = ctx.draw_instruction(sample)
         t0 = time.time()
-        img = backend.draw(sample.message, instruction, **ctx.gen_kw)
+        img = backend.draw(
+            sample.message, instruction, seed=ctx.g2u_seed, **ctx.gen_kw,
+        )
         elapsed_draw = time.time() - t0
 
-        # Save with sample_id in filename (not uuid8!)
         img_path = None
-        if ctx.save_generated and img is not None:
-            gen_dir = ctx.output_dir / backend.model_name / self.name / "generated" / ctx.view / ctx.task / ctx.variant
-            gen_dir.mkdir(parents=True, exist_ok=True)
-            img_path = gen_dir / f"{sample.id}_r0.png"
-            img.save(str(img_path))
-        elif img is not None:
-            # Still need a path for the message — use temp
-            import tempfile
-            fd, tmp = tempfile.mkstemp(suffix=".png")
-            import os
-            os.close(fd)
-            img.save(tmp)
-            img_path = Path(tmp)
+        img_hash = ""
+        if img is not None:
+            if ctx.save_generated:
+                gen_dir = (
+                    ctx.output_dir / backend.model_name / self.name / "generated"
+                    / ctx.view / ctx.task / ctx.variant
+                )
+                gen_dir.mkdir(parents=True, exist_ok=True)
+                img_path = gen_dir / f"{sample.id}_r0.png"
+                img.save(str(img_path))
+            else:
+                fd, tmp = tempfile.mkstemp(suffix=".png")
+                os.close(fd)
+                img.save(tmp)
+                img_path = Path(tmp)
+            if img_path.exists():
+                img_hash = _sha256(img_path)
 
-        trace.append(TraceStep(
+        trace = [TraceStep(
             round=0, kind="image",
             image=img_path,
-            triggered_by="forced",
+            triggered_by="forced_image_first",
             elapsed_s=elapsed_draw,
-        ))
+        )]
 
-        # 2) Append intermediate image to message and answer
-        followup_text = ctx.draw_followup_text
+        # Original message (question + source images) already present.
+        # Append G instruction (real G history), then I0, then follow-up.
         augmented_msg = list(sample.message) + [
-            {"type": "text", "value": followup_text},
+            {"type": "text", "value": instruction},
             {"type": "image", "value": img_path},
+            {"type": "text", "value": followup_text},
         ]
 
         t0 = time.time()
@@ -107,6 +110,19 @@ class ExternalDrawStrategy(Strategy):
         elapsed_understand = time.time() - t0
 
         pred = preds[0] if preds else Prediction(error="understand returned empty")
-        pred.trace = trace + pred.trace
+        pred.trace = trace + list(pred.trace or [])
         pred.generated_images = [img_path] if img_path else []
+        pred.meta["generated_image_count"] = 1 if img_path else 0
+        if img_hash:
+            pred.meta["generated_image_sha256"] = img_hash
+        pred.meta["post_image_prompt_mode"] = "appended_user_turn"
+        pred.meta.setdefault("understand_elapsed_s", elapsed_understand)
         return pred
+
+
+def _sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(65536), b""):
+            h.update(chunk)
+    return h.hexdigest()

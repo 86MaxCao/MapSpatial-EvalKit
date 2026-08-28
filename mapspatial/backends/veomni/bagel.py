@@ -39,6 +39,7 @@ class BagelBackend(Backend):
         native_interleave=True,  # has InterleaveInferencer
         max_images=24,
         video=False,
+        forced_interleave=True,
     )
     COMPAT: ClassVar[tuple[str, ...]] = ()
 
@@ -286,28 +287,18 @@ class BagelBackend(Backend):
         return "\n".join(x for x in output if isinstance(x, str))
 
     def draw(self, context: Message, instruction: str, **kw) -> "Image.Image":
-        """Generate an intermediate image using forced interleave.
-
-        Uses forced_interleave_inference() which unconditionally generates
-        an image after text reasoning, without requiring the model to emit
-        a marker token. This is needed because base Bagel was not trained
-        to emit <image_start>.
-        """
+        """Image-first G: encode prompt + instruction, generate one image, drop KV."""
         import torch
         from PIL import Image
 
         inferencer = self._get_inferencer()
-
-        # Build input list for the inferencer
         input_list = to_interleave_list(context)
-        # Append the draw instruction
-        input_list.append(instruction)
+        if instruction:
+            input_list.append(instruction)
 
-        # Use forced_interleave_inference — no marker check, always generates
-        output = inferencer.forced_interleave_inference(
+        output = inferencer.image_first_inference(
             input_lists=input_list,
-            think=True,
-            max_think_token_n=500,
+            generate_answer=False,
             do_sample=False,
             text_temperature=self._temperature,
             cfg_text_scale=self._cfg_text_scale,
@@ -318,10 +309,10 @@ class BagelBackend(Backend):
             cfg_renorm_min=self._cfg_renorm_min,
             cfg_renorm_type=self._cfg_renorm_type,
             image_shapes=self._image_shapes,
-            max_rounds=1,
+            noise_seed=kw.get("seed"),
+            max_images=1,
         )
 
-        # Find the generated image in output
         for item in reversed(output):
             if isinstance(item, Image.Image):
                 return item
@@ -414,33 +405,33 @@ class BagelBackend(Backend):
     def forced_interleave(
         self,
         message: Message,
+        instruction: str = "",
         *,
-        max_rounds: int = 1,
+        max_images: int = 1,
+        image_first: bool = True,
+        followup: str = "",
         **kw,
     ) -> Prediction:
-        """Forced interleaved reasoning — no marker needed.
-
-        Generates text reasoning, then unconditionally generates an image,
-        feeds it back into the shared KV cache, and generates the final answer.
-
-        For base Bagel which was not trained to emit '<image_start>' markers.
-        """
+        """Image-first stateful G2U on a shared KV cache."""
         import torch
         from PIL import Image
 
         inferencer = self._get_inferencer()
         input_list = to_interleave_list(message)
+        if instruction:
+            input_list.append(instruction)
 
         trace: list[TraceStep] = []
         t0 = time.time()
 
         with torch.no_grad():
-            output = inferencer.forced_interleave_inference(
+            output = inferencer.image_first_inference(
                 input_lists=input_list,
-                think=True,
-                max_think_token_n=kw.get("max_think_tokens", self._max_think_tokens),
+                generate_answer=True,
+                followup=followup or "",
                 do_sample=kw.get("temperature", self._temperature) > 0,
                 text_temperature=kw.get("temperature", self._temperature) or 1.0,
+                max_think_token_n=kw.get("max_think_tokens", self._max_think_tokens),
                 cfg_text_scale=self._cfg_text_scale,
                 cfg_img_scale=self._cfg_img_scale,
                 cfg_interval=self._cfg_interval,
@@ -449,43 +440,40 @@ class BagelBackend(Backend):
                 cfg_renorm_min=self._cfg_renorm_min,
                 cfg_renorm_type=self._cfg_renorm_type,
                 image_shapes=self._image_shapes,
-                max_rounds=max_rounds,
+                noise_seed=kw.get("seed"),
+                max_images=max_images,
             )
 
         elapsed = time.time() - t0
 
-        # Parse output: [text_reasoning, image, text_answer]
-        text_parts = []
-        generated_images = []
-        round_num = 0
-
+        generated_images: list = []
+        text_parts: list[str] = []
         for item in output:
-            if isinstance(item, str):
+            if isinstance(item, Image.Image):
+                generated_images.append(item)
                 trace.append(TraceStep(
-                    round=round_num, kind="text",
+                    round=0, kind="image",
+                    triggered_by="forced_image_first",
+                    elapsed_s=elapsed,
+                ))
+            elif isinstance(item, str) and item:
+                text_parts.append(item)
+                trace.append(TraceStep(
+                    round=1, kind="text",
                     text=item,
                     triggered_by=None,
-                    elapsed_s=elapsed / max(len(output), 1),
+                    elapsed_s=elapsed,
                 ))
-                text_parts.append(item)
-            elif isinstance(item, Image.Image):
-                trace.append(TraceStep(
-                    round=round_num, kind="image",
-                    triggered_by="forced",
-                    elapsed_s=elapsed / max(len(output), 1),
-                ))
-                generated_images.append(item)
-                round_num += 1
-
-        # Last text part is the final answer
-        final_text = text_parts[-1] if text_parts else ""
 
         return Prediction(
-            text=final_text,
+            text=text_parts[-1] if text_parts else "",
             generated_images=generated_images,
             trace=trace,
             meta={
-                "rounds": round_num,
-                "draw_triggered": len(generated_images) > 0,
+                "rounds": 2 if text_parts else 1,
+                "draw_triggered": True,
+                "pre_image_text_tokens": 0,
+                "reconsume_mode": "pixel",
+                "post_image_prompt_mode": "followup_appended",
             },
         )

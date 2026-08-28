@@ -222,6 +222,18 @@ class JoyAIImageModel(PreTrainedModel):
         if self.pipeline is None:
             raise RuntimeError("Generation pipeline not loaded. Call load_weights_from_checkpoint() first.")
 
+        if images:
+            n_img = len(images)
+            image_tokens = "<image>\n" * n_img
+            # CFG encodes the negative prompt with the same images. Without
+            # matching vision pads Qwen raises tokens:0 / features:N.
+            if "<image>" not in prompt:
+                prompt = f"<|im_start|>user\n{image_tokens}{prompt}<|im_end|>\n"
+            if "<image>" not in (negative_prompt or ""):
+                negative_prompt = (
+                    f"<|im_start|>user\n{image_tokens}{negative_prompt or ''}<|im_end|>\n"
+                )
+
         generator = torch.Generator(device=self.pipeline.device).manual_seed(seed)
         output = self.pipeline(
             prompt=[prompt],

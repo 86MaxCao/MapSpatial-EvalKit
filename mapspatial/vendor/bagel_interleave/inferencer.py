@@ -382,6 +382,86 @@ class InterleaveInferencer:
         return output_list
 
     @torch.no_grad()
+    def image_first_inference(
+        self,
+        input_lists: List[Union[str, Image.Image]],
+        *,
+        generate_answer: bool = True,
+        followup: str = "",
+        do_sample=False,
+        text_temperature=0.3,
+        max_think_token_n=1000,
+        cfg_text_scale=3.0,
+        cfg_img_scale=1.5,
+        cfg_interval=[0.4, 1.0],
+        timestep_shift=3.0,
+        num_timesteps=50,
+        cfg_renorm_min=0.0,
+        cfg_renorm_type="global",
+        image_shapes=(1024, 1024),
+        noise_seed=None,
+        max_images: int = 1,
+    ) -> List[Union[str, Image.Image]]:
+        """Image-first G2U: encode prompt, generate one image, optionally answer.
+
+        Does NOT call gen_text() before gen_image(). Used by both C-R draw()
+        (generate_answer=False) and C-F (generate_answer=True, shared KV).
+        """
+        output_list: List[Union[str, Image.Image]] = []
+        gen_context = self.init_gen_context()
+        cfg_text_context = deepcopy(gen_context)
+        cfg_img_context = deepcopy(gen_context)
+
+        with torch.autocast(device_type="cuda", enabled=True, dtype=torch.bfloat16):
+            for input_term in input_lists:
+                if isinstance(input_term, str):
+                    cfg_text_context = deepcopy(gen_context)
+                    gen_context = self.update_context_text(input_term, gen_context)
+                    cfg_img_context = self.update_context_text(input_term, cfg_img_context)
+                elif isinstance(input_term, Image.Image):
+                    input_term = self.vae_transform.resize_transform(pil_img2rgb(input_term))
+                    gen_context = self.update_context_image(input_term, gen_context, vae=True)
+                    image_shapes = input_term.size[::-1]
+                    cfg_text_context = deepcopy(gen_context)
+                else:
+                    raise ValueError(f"Unsupported input type: {type(input_term)}")
+
+            n_img = max(1, int(max_images))
+            for _ in range(n_img):
+                img = self.gen_image(
+                    image_shapes,
+                    gen_context,
+                    cfg_text_precontext=cfg_text_context,
+                    cfg_img_precontext=cfg_img_context,
+                    cfg_text_scale=cfg_text_scale,
+                    cfg_img_scale=cfg_img_scale,
+                    cfg_interval=cfg_interval,
+                    timestep_shift=timestep_shift,
+                    num_timesteps=num_timesteps,
+                    cfg_renorm_min=cfg_renorm_min,
+                    cfg_renorm_type=cfg_renorm_type,
+                    noise_seed=noise_seed,
+                )
+                output_list.append(img)
+                img_input = self.vae_transform.resize_transform(pil_img2rgb(img))
+                gen_context = self.update_context_image(
+                    img_input, gen_context, vae=True, vit=True,
+                )
+
+            if generate_answer:
+                if followup:
+                    gen_context = self.update_context_text(followup, gen_context)
+                gen_text = self.gen_text(
+                    gen_context,
+                    do_sample=do_sample,
+                    temperature=text_temperature,
+                    max_length=max_think_token_n,
+                )
+                output_list.append(gen_text)
+
+        return output_list
+
+    @torch.no_grad()
     def forced_interleave_inference(
         self,
         input_lists: List[Union[str, Image.Image]],
@@ -399,16 +479,34 @@ class InterleaveInferencer:
         image_shapes=(1024, 1024),
         noise_seed=None,
         max_rounds: int = 1,
+        image_first: bool = True,
+        generate_answer: bool = True,
+        followup: str = "",
     ) -> List[Union[str, Image.Image]]:
-        """Forced interleave: always generate an image after first text round.
+        """Forced G2U. Default is image-first (no pre-image gen_text).
 
-        Unlike interleave_inference which waits for '<image_start>' marker,
-        this method unconditionally generates an image after the first text
-        reasoning round, feeds it back into the KV cache, then continues
-        text generation for the final answer.
-
-        For models not trained to emit markers (e.g. base Bagel).
+        ``image_first=False`` keeps the legacy plan-then-image path for ablations.
         """
+        if image_first:
+            return self.image_first_inference(
+                input_lists,
+                generate_answer=generate_answer,
+                followup=followup,
+                do_sample=do_sample,
+                text_temperature=text_temperature,
+                max_think_token_n=max_think_token_n,
+                cfg_text_scale=cfg_text_scale,
+                cfg_img_scale=cfg_img_scale,
+                cfg_interval=cfg_interval,
+                timestep_shift=timestep_shift,
+                num_timesteps=num_timesteps,
+                cfg_renorm_min=cfg_renorm_min,
+                cfg_renorm_type=cfg_renorm_type,
+                image_shapes=image_shapes,
+                noise_seed=noise_seed,
+                max_images=max_rounds,
+            )
+
         output_list = []
         gen_context = self.init_gen_context()
         cfg_text_context = deepcopy(gen_context)
@@ -435,7 +533,6 @@ class InterleaveInferencer:
                 else:
                     raise ValueError(f"Unsupported input type: {type(input_term)}")
 
-            # Round 1: text reasoning
             gen_text = self.gen_text(
                 gen_context,
                 do_sample=do_sample,
@@ -445,7 +542,6 @@ class InterleaveInferencer:
             output_list.append(gen_text)
             gen_context = self.update_context_text(gen_text, gen_context)
 
-            # Force image generation (no marker check)
             rounds = 0
             while rounds < max_rounds:
                 img = self.gen_image(
@@ -468,7 +564,6 @@ class InterleaveInferencer:
                 gen_context = self.update_context_image(img_input, gen_context, vae=True)
                 rounds += 1
 
-            # Final text: answer with image context
             gen_text = self.gen_text(
                 gen_context,
                 do_sample=do_sample,

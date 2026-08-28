@@ -27,6 +27,7 @@ from .backends.registry import get_backend_cls
 from .strategies import get_strategy
 from .eval.answer import extract_answer, is_correct
 from .eval.metrics import Cell, build_summary, save_summary
+from .types import load_g2u_defaults
 from .compat import applied as compat_applied
 
 
@@ -218,6 +219,7 @@ def run(
     # Build run context — populate marker/max_rounds from backend_args
     gen_kw = cfg.model.generate
     ba = cfg.model.backend_args or {}
+    g2u = load_g2u_defaults()
     ctx = RunContext(
         output_dir=cfg.output_dir,
         gen_kw=gen_kw,
@@ -225,6 +227,10 @@ def run(
         marker=ba.get("marker", "<image_start>"),
         view="", task="", variant="",
         save_generated=not cfg.no_save_generated,
+        draw_followup_text=str(g2u.get("understand_followup") or "").strip()
+            or "Use the generated visual evidence to answer the original question.",
+        generation_system_prompt=str(g2u.get("generation_system_prompt") or "").strip(),
+        g2u_seed=int(g2u.get("seed") or 42),
     )
 
     # Result output directory
@@ -267,6 +273,10 @@ def run(
 
         # Filter to pending
         pending = [s for s in samples if s.id not in done_ids]
+
+        if cfg.max_samples and cfg.max_samples > 0:
+            pending = pending[: max(0, cfg.max_samples - len(done_ids))]
+            samples = samples[: cfg.max_samples]
 
         # Striped split for multi-GPU
         if cfg.world_size > 1:

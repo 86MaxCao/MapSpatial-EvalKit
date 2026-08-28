@@ -1720,7 +1720,10 @@ class NEOChatModel(PreTrainedModel):
     def _append_text_tokens_to_cache(self, cache, t_idx, input_ids):
         # Feed text tokens one at a time (single-token steps need no attn mask,
         # same convention as the interleave_gen text loop).
+        # t_idx is the last committed RoPE position; increment first so the
+        # new token occupies max+1 (matches understand()).
         for j in range(input_ids.shape[1]):
+            t_idx += 1
             tok = input_ids[:, j]
             new_indexes = torch.tensor([[t_idx], [0], [0]], device=tok.device, dtype=torch.long)
             self.language_model(
@@ -1729,7 +1732,6 @@ class NEOChatModel(PreTrainedModel):
                 past_key_values=cache,
                 use_cache=True,
             )
-            t_idx += 1
         return t_idx
 
     def _generate_think(self, tokenizer, prefix_outputs, past_key_values, t_idx, IMG_START_TOKEN, max_think_tokens=1024):
@@ -1746,6 +1748,7 @@ class NEOChatModel(PreTrainedModel):
             if token_item == eos_token_id:
                 break
             think_token_ids.append(token_item)
+            t_idx += 1
             new_indexes = torch.tensor([[t_idx], [0], [0]], device=self.device, dtype=torch.long)
             outputs = self.language_model(
                 input_ids=next_token.unsqueeze(0),
@@ -1754,7 +1757,6 @@ class NEOChatModel(PreTrainedModel):
                 use_cache=True,
             )
             past_key_values = outputs.past_key_values
-            t_idx += 1
             next_token = torch.argmax(outputs.logits[:, -1, :], dim=-1)
             if token_item == think_end_token_id:
                 break
@@ -2104,6 +2106,9 @@ class NEOChatModel(PreTrainedModel):
         think_mode=False,
         seed=0,
         force_image_at=0,
+        force_image_first=False,
+        followup="",
+        ready_image=None,
     ):
         """Interleaved text + image generation.
 
@@ -2242,6 +2247,11 @@ class NEOChatModel(PreTrainedModel):
         img_count = 0
 
         next_token = torch.argmax(outputs_cond.logits[:, -1, :], dim=-1)
+        if force_image_first:
+            # Image-first G2U: skip pre-image AR and enter the image branch now.
+            next_token = torch.tensor(
+                [self.img_start_token_id], device=self.device, dtype=torch.long
+            )
         generator = torch.Generator(self.device).manual_seed(seed)
 
         embed_tokens = self.language_model.get_input_embeddings()
@@ -2258,7 +2268,9 @@ class NEOChatModel(PreTrainedModel):
                 gen_tokens.append(token_item)
                 current_generated_tokens += 1
 
-                # Forward single token with KV cache (understanding path)
+                # Forward single token with KV cache (understanding path).
+                # Increment first: t_index_cond is last committed position.
+                t_index_cond += 1
                 new_indexes = torch.tensor(
                     [[t_index_cond], [0], [0]], device=self.device, dtype=torch.long
                 )
@@ -2269,7 +2281,6 @@ class NEOChatModel(PreTrainedModel):
                     use_cache=True,
                 )
                 past_key_values_cond = outputs_cond.past_key_values
-                t_index_cond += 1
                 next_token = torch.argmax(outputs_cond.logits[:, -1, :], dim=-1)
 
                 # Stream partial text
@@ -2309,6 +2320,19 @@ class NEOChatModel(PreTrainedModel):
                     next_token = torch.tensor(
                         [self.img_start_token_id], device=self.device, dtype=torch.long
                     )
+                elif (
+                    force_image_first
+                    and img_count >= 1
+                    and not hit_max_tokens
+                    and not generated_text.replace("<image>", "").strip()
+                ):
+                    # Immediate EOS after I0 — keep decoding the answer.
+                    logits = outputs_cond.logits[:, -1, :].clone()
+                    logits[:, eos_token_id] = torch.finfo(logits.dtype).min
+                    logits[:, self.img_start_token_id] = torch.finfo(logits.dtype).min
+                    next_token = torch.argmax(logits, dim=-1)
+                    if next_token.item() in (eos_token_id, self.img_start_token_id):
+                        break
                 else:
                     break
 
@@ -2321,6 +2345,7 @@ class NEOChatModel(PreTrainedModel):
                     print(f"\n[image {img_count + 1}] preparing diffusion...", flush=True)
 
                 # Add the <img> token to condition and text_uncondition caches
+                t_index_cond += 1
                 new_indexes_cond = torch.tensor(
                     [[t_index_cond], [0], [0]], device=self.device, dtype=torch.long
                 )
@@ -2331,8 +2356,8 @@ class NEOChatModel(PreTrainedModel):
                     use_cache=True,
                 )
                 past_key_values_cond = outputs_cond.past_key_values
-                t_index_cond += 1
 
+                t_index_tu += 1
                 new_indexes_tu = torch.tensor(
                     [[t_index_tu], [0], [0]], device=self.device, dtype=torch.long
                 )
@@ -2343,7 +2368,6 @@ class NEOChatModel(PreTrainedModel):
                     use_cache=True,
                 )
                 past_key_values_tu = outputs_tu.past_key_values
-                t_index_tu += 1
 
                 image_size = image_size_list[img_count]
                 token_h = image_size[1] // (self.patch_size * merge_size)
@@ -2365,52 +2389,69 @@ class NEOChatModel(PreTrainedModel):
                 grid_w = image_size[0] // self.patch_size
                 gen_grid_hw = torch.tensor([[grid_h, grid_w]], device=device)
 
-                noise_scale = self.noise_scale
-                if self.noise_scale_mode in ("resolution", "dynamic", "dynamic_sqrt"):
-                    base = float(self.noise_scale_base_image_seq_len)
-                    noise_scale = math.sqrt(
-                        (grid_h * grid_w) / (merge_size ** 2) / base
-                    ) * float(self.noise_scale)
-                    if self.noise_scale_mode == "dynamic_sqrt":
-                        noise_scale = math.sqrt(noise_scale)
-                noise_scale = min(noise_scale, self.noise_scale_max_value)
+                if ready_image is not None:
+                    image_prediction = ready_image.to(
+                        device=device, dtype=outputs_cond.logits.dtype
+                    )
+                    if image_prediction.dim() == 3:
+                        image_prediction = image_prediction.unsqueeze(0)
+                    _, _, ih, iw = image_prediction.shape
+                    image_size = (iw, ih)
+                    token_h = ih // (self.patch_size * merge_size)
+                    token_w = iw // (self.patch_size * merge_size)
+                    grid_h = ih // self.patch_size
+                    grid_w = iw // self.patch_size
+                    gen_grid_hw = torch.tensor([[grid_h, grid_w]], device=device)
+                else:
+                    noise_scale = self.noise_scale
+                    if self.noise_scale_mode in ("resolution", "dynamic", "dynamic_sqrt"):
+                        base = float(self.noise_scale_base_image_seq_len)
+                        noise_scale = math.sqrt(
+                            (grid_h * grid_w) / (merge_size ** 2) / base
+                        ) * float(self.noise_scale)
+                        if self.noise_scale_mode == "dynamic_sqrt":
+                            noise_scale = math.sqrt(noise_scale)
+                    noise_scale = min(noise_scale, self.noise_scale_max_value)
 
-                image_prediction = noise_scale * torch.randn(
-                    (1, 3, image_size[1], image_size[0]),
-                    device=device,
-                    dtype=outputs_cond.logits.dtype,
-                    generator=generator,
-                )
-
-                # Prepare flash KV caches for denoising loop
-                prepare_flash_kv_cache(
-                    past_key_values_cond, current_len=token_h * token_w, batch_size=1
-                )
-                prepare_flash_kv_cache(
-                    past_key_values_tu, current_len=token_h * token_w, batch_size=1
-                )
-                prepare_flash_kv_cache(
-                    past_key_values_iu, current_len=token_h * token_w, batch_size=1
-                )
-
-                timesteps = torch.linspace(0.0, 1.0, num_steps + 1, device=device)
-                if enable_timestep_shift:
-                    timesteps = self._apply_time_schedule(
-                        timesteps, token_h * token_w, timestep_shift
+                    image_prediction = noise_scale * torch.randn(
+                        (1, 3, image_size[1], image_size[0]),
+                        device=device,
+                        dtype=outputs_cond.logits.dtype,
+                        generator=generator,
                     )
 
-                step_iter = range(num_steps)
-                if verbose:
-                    try:
-                        from tqdm import tqdm as _tqdm
-                        step_iter = _tqdm(
-                            step_iter,
-                            desc=f"image {img_count + 1} ({image_size[0]}x{image_size[1]})",
-                            total=num_steps,
-                            leave=False,
+                    # Prepare flash KV caches for denoising loop
+                    prepare_flash_kv_cache(
+                        past_key_values_cond, current_len=token_h * token_w, batch_size=1
+                    )
+                    prepare_flash_kv_cache(
+                        past_key_values_tu, current_len=token_h * token_w, batch_size=1
+                    )
+                    prepare_flash_kv_cache(
+                        past_key_values_iu, current_len=token_h * token_w, batch_size=1
+                    )
+
+                if ready_image is None:
+                    timesteps = torch.linspace(0.0, 1.0, num_steps + 1, device=device)
+                    if enable_timestep_shift:
+                        timesteps = self._apply_time_schedule(
+                            timesteps, token_h * token_w, timestep_shift
                         )
-                    except ImportError:
-                        pass
+
+                    step_iter = range(num_steps)
+                    if verbose:
+                        try:
+                            from tqdm import tqdm as _tqdm
+                            step_iter = _tqdm(
+                                step_iter,
+                                desc=f"image {img_count + 1} ({image_size[0]}x{image_size[1]})",
+                                total=num_steps,
+                                leave=False,
+                            )
+                        except ImportError:
+                            pass
+                else:
+                    step_iter = range(0)
 
                 # --- Denoising loop ---
                 for step_i in step_iter:
@@ -2517,9 +2558,10 @@ class NEOChatModel(PreTrainedModel):
 
                 generated_images.append(image_prediction)
 
-                clear_flash_kv_cache(past_key_values_cond)
-                clear_flash_kv_cache(past_key_values_tu)
-                clear_flash_kv_cache(past_key_values_iu)
+                if ready_image is None:
+                    clear_flash_kv_cache(past_key_values_cond)
+                    clear_flash_kv_cache(past_key_values_tu)
+                    clear_flash_kv_cache(past_key_values_iu)
 
                 img_count += 1
 
@@ -2596,9 +2638,31 @@ class NEOChatModel(PreTrainedModel):
                 outputs_cond, t_index_cond = append_image_to_cache(
                     past_key_values_cond, t_index_cond
                 )
+                past_key_values_cond = outputs_cond.past_key_values
                 outputs_tu, t_index_tu = append_image_to_cache(
                     past_key_values_tu, t_index_tu
                 )
+                past_key_values_tu = outputs_tu.past_key_values
+
+                if followup and img_count == 1:
+                    followup_ids = tokenizer(
+                        followup, return_tensors="pt", add_special_tokens=False
+                    )["input_ids"].to(self.device)
+                    for j in range(followup_ids.shape[1]):
+                        t_index_cond += 1
+                        tok = followup_ids[:, j]
+                        new_indexes = torch.tensor(
+                            [[t_index_cond], [0], [0]],
+                            device=self.device,
+                            dtype=torch.long,
+                        )
+                        outputs_cond = self.language_model(
+                            input_ids=tok.unsqueeze(0),
+                            indexes=new_indexes,
+                            past_key_values=past_key_values_cond,
+                            use_cache=True,
+                        )
+                        past_key_values_cond = outputs_cond.past_key_values
 
                 next_token = torch.argmax(outputs_cond.logits[:, -1, :], dim=-1)
 

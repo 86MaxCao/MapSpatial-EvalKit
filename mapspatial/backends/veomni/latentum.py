@@ -41,6 +41,7 @@ class LatentUMBackend(Backend):
         native_interleave=False,
         max_images=24,
         video=False,
+        forced_interleave=True,
     )
     COMPAT: ClassVar[tuple[str, ...]] = ()
 
@@ -276,10 +277,14 @@ class LatentUMBackend(Backend):
     def interleave(
         self,
         message: Message,
+        instruction: str = "",
         *,
         max_rounds: int = 3,
         marker: str = "<img>",
         force_image_at: int = 0,
+        image_first: bool = False,
+        max_images: int | None = None,
+        followup: str = "",
         **kw,
     ) -> Prediction:
         """Interleaved reasoning loop using the save-rewind-reinject pattern.
@@ -326,6 +331,8 @@ class LatentUMBackend(Backend):
         input_list = to_interleave_list(message)
         images = [item for item in input_list if not isinstance(item, str)]
         text_parts = [item for item in input_list if isinstance(item, str)]
+        if instruction:
+            text_parts.append(instruction)
         prompt_text = strip_placeholders("\n".join(text_parts))
 
         # -- 2. Preprocess images with official load_image ----------------------
@@ -402,6 +409,9 @@ class LatentUMBackend(Backend):
             "sample_logits": do_sample,
         }
 
+        n_image_cap = max_images if max_images is not None else (1 if image_first else max_rounds)
+        n_images = 0
+
         # -- 6-9. Main interleave loop ------------------------------------------
         all_tokens: list[int] = []
         trace_steps: list[TraceStep] = []
@@ -413,6 +423,19 @@ class LatentUMBackend(Backend):
                 return self._sample(logits, temperature, top_k, top_p).item()
             return logits.argmax(dim=-1).item()
 
+        def _begin_image_phase(kv):
+            kv_before = deepcopy(kv)
+            img_embed = internvl.language_model.get_input_embeddings()(
+                torch.tensor([[img_start_id]], device=device)
+            )
+            out = internvl.language_model.model(
+                inputs_embeds=img_embed,
+                past_key_values=kv,
+                vision_token_mask=torch.ones(1, 1, device=device, dtype=dtype),
+                use_cache=True,
+            )
+            return kv_before, deepcopy(out.past_key_values), out.last_hidden_state
+
         while round_idx < max_rounds:
             round_idx += 1
             step_tokens: list[int] = []
@@ -420,92 +443,88 @@ class LatentUMBackend(Backend):
             forced_this_round = False
             t_round = time.time()
 
-            # -- AR text generation -------------------------------------------
-            for _ in range(max_text_tokens):
-                logits = internvl.language_model.lm_head(last_hidden)[:, -1, :]
-                next_id = _pick_token(logits)
-                step_tokens.append(next_id)
-                all_tokens.append(next_id)
+            skip_pre_image_ar = (
+                image_first and round_idx == 1 and n_images < n_image_cap
+            )
 
-                if next_id == img_start_id:
-                    # Save KV cache before image generation
-                    kv_before_img = deepcopy(past_key_values)
+            if skip_pre_image_ar:
+                kv_before_img, past_key_values_phase2, base_hidden = _begin_image_phase(
+                    past_key_values
+                )
+                found_img = True
+                forced_this_round = True
+            else:
+                # -- AR text generation -------------------------------------------
+                for _ in range(max_text_tokens):
+                    logits = internvl.language_model.lm_head(last_hidden)[:, -1, :]
+                    next_id = _pick_token(logits)
+                    step_tokens.append(next_id)
+                    all_tokens.append(next_id)
 
-                    # Feed <img> with vision_token_mask=1 → base_hidden for ar_head
-                    img_embed = internvl.language_model.get_input_embeddings()(
+                    if next_id == img_start_id:
+                        if n_images >= n_image_cap:
+                            step_tokens.pop()
+                            all_tokens.pop()
+                            break
+                        kv_before_img, past_key_values_phase2, base_hidden = (
+                            _begin_image_phase(past_key_values)
+                        )
+                        found_img = True
+                        break
+
+                    # Forced mode (legacy, not image-first): inject after N tokens.
+                    force_img = (
+                        (not image_first)
+                        and force_image_at > 0
+                        and round_idx == 1
+                        and n_images < n_image_cap
+                        and (next_id == eos_id or len(step_tokens) >= force_image_at)
+                    )
+                    if next_id == eos_id and not force_img:
+                        break
+
+                    if force_img:
+                        if next_id != eos_id:
+                            step_tokens.pop()
+                            all_tokens.pop()
+                        kv_before_img, past_key_values_phase2, base_hidden = (
+                            _begin_image_phase(past_key_values)
+                        )
+                        found_img = True
+                        forced_this_round = True
+                        break
+
+                    next_embed = internvl.language_model.get_input_embeddings()(
                         torch.tensor([[next_id]], device=device)
                     )
                     outputs = internvl.language_model.model(
-                        inputs_embeds=img_embed,
+                        inputs_embeds=next_embed,
                         past_key_values=past_key_values,
-                        vision_token_mask=torch.ones(1, 1, device=device, dtype=dtype),
+                        vision_token_mask=torch.zeros(1, 1, device=device, dtype=dtype),
                         use_cache=True,
                     )
-                    past_key_values_phase2 = deepcopy(outputs.past_key_values)
-                    base_hidden = outputs.last_hidden_state
-                    found_img = True
-                    break
+                    past_key_values = outputs.past_key_values
+                    last_hidden = outputs.last_hidden_state
 
-                # Forced mode: model never learned to emit <img> in general
-                # reasoning, so inject the image phase after force_image_at
-                # text tokens (or at EOS) of round 1.
-                force_img = (
-                    force_image_at > 0
-                    and round_idx == 1
-                    and (next_id == eos_id or len(step_tokens) >= force_image_at)
-                )
-                if next_id == eos_id and not force_img:
-                    break
-
-                if force_img:
-                    # Keep text and KV cache aligned: the pending token was
-                    # never forwarded, so drop it (eos stays appended and is
-                    # stripped by skip_special_tokens at decode time).
-                    if next_id != eos_id:
-                        step_tokens.pop()
-                        all_tokens.pop()
-                    kv_before_img = deepcopy(past_key_values)
-                    img_embed = internvl.language_model.get_input_embeddings()(
-                        torch.tensor([[img_start_id]], device=device)
-                    )
-                    outputs = internvl.language_model.model(
-                        inputs_embeds=img_embed,
-                        past_key_values=past_key_values,
-                        vision_token_mask=torch.ones(1, 1, device=device, dtype=dtype),
-                        use_cache=True,
-                    )
-                    past_key_values_phase2 = deepcopy(outputs.past_key_values)
-                    base_hidden = outputs.last_hidden_state
-                    found_img = True
-                    forced_this_round = True
-                    break
-
-                # Feed next text token (vision_token_mask=0)
-                next_embed = internvl.language_model.get_input_embeddings()(
-                    torch.tensor([[next_id]], device=device)
-                )
-                outputs = internvl.language_model.model(
-                    inputs_embeds=next_embed,
-                    past_key_values=past_key_values,
-                    vision_token_mask=torch.zeros(1, 1, device=device, dtype=dtype),
-                    use_cache=True,
-                )
-                past_key_values = outputs.past_key_values
-                last_hidden = outputs.last_hidden_state
-
-            # Record text trace step
+            # Record text trace step (skip empty pre-image round)
             text_elapsed = time.time() - t_round
-            text_content = tokenizer.decode(step_tokens, skip_special_tokens=True)
-            trace_steps.append(TraceStep(
-                round=round_idx,
-                kind="text",
-                text=text_content,
-                triggered_by=("forced" if forced_this_round else "model_marker") if found_img else None,
-                elapsed_s=text_elapsed,
-            ))
+            if step_tokens:
+                text_content = tokenizer.decode(step_tokens, skip_special_tokens=True)
+                trace_steps.append(TraceStep(
+                    round=round_idx,
+                    kind="text",
+                    text=text_content,
+                    triggered_by=(
+                        "forced_image_first" if (image_first and found_img)
+                        else ("forced" if forced_this_round else "model_marker")
+                    ) if found_img else None,
+                    elapsed_s=text_elapsed,
+                ))
 
             if not found_img:
                 break
+
+            n_images += 1
 
             # -- 6. Image generation phase (256 VQ codes) ----------------------
             t_img = time.time()
@@ -577,11 +596,30 @@ class LatentUMBackend(Backend):
 
             all_tokens.append(img_end_id)
 
+            if followup:
+                follow_ids = tokenizer(followup, add_special_tokens=False)["input_ids"]
+                for tid in follow_ids:
+                    next_embed = internvl.language_model.get_input_embeddings()(
+                        torch.tensor([[tid]], device=device)
+                    )
+                    outputs = internvl.language_model.model(
+                        inputs_embeds=next_embed,
+                        past_key_values=past_key_values,
+                        vision_token_mask=torch.zeros(1, 1, device=device, dtype=dtype),
+                        use_cache=True,
+                    )
+                    past_key_values = outputs.past_key_values
+                    last_hidden = outputs.last_hidden_state
+                followup = ""
+
             img_elapsed = time.time() - t_img
             trace_steps.append(TraceStep(
                 round=round_idx,
                 kind="image",
-                triggered_by="forced" if forced_this_round else "model_marker",
+                triggered_by=(
+                    "forced_image_first" if image_first
+                    else ("forced" if forced_this_round else "model_marker")
+                ),
                 elapsed_s=img_elapsed,
             ))
 
@@ -617,36 +655,48 @@ class LatentUMBackend(Backend):
             generated_images=generated_images,
             trace=trace_steps,
             meta={
-                "strategy": "native_interleave" if force_image_at <= 0 else "forced_interleave",
+                "strategy": (
+                    "forced_interleave" if (image_first or force_image_at > 0)
+                    else "native_interleave"
+                ),
                 "rounds": round_idx,
                 "draw_triggered": len(all_generated_codes) > 0,
                 "backend": self.model_name,
+                "pre_image_text_tokens": 0 if image_first else None,
+                "reconsume_mode": "latent",
+                "post_image_prompt_mode": "followup_appended",
             },
         )
 
     def forced_interleave(
         self,
         message: Message,
+        instruction: str = "",
         *,
-        max_rounds: int = 3,
-        force_image_at: int | None = None,
+        max_images: int = 1,
+        image_first: bool = True,
+        followup: str = "",
         **kw,
     ) -> Prediction:
-        """Forced interleaved reasoning — no marker needed.
+        """Image-first stateful G2U on a shared KV cache.
 
-        Base LatentUM was only trained to emit '<img>' in FrozenLake-style
-        planning prompts, so marker-driven interleave never triggers on
-        MapSpatial (measured 0/400 on t1). Here the first text round is
-        interrupted
-        after ``force_image_at`` tokens (or at EOS) and the image phase runs
-        unconditionally; text generation then resumes for the final answer,
-        all on the same KV cache.
+        C-F reconsumes the generated VQ latent (not a pixel re-encode).
+        PNG is still decoded for viewing/saving.
         """
-        if force_image_at is None:
-            force_image_at = int(self._cfg.backend_args.get("force_image_at", 96))
+        kw = dict(kw)
+        kw.pop("max_images", None)
+        kw.pop("image_first", None)
+        kw.pop("followup", None)
+        kw.pop("max_rounds", None)
         return self.interleave(
             message,
-            max_rounds=max_rounds,
-            force_image_at=force_image_at,
+            instruction=instruction,
+            max_rounds=2 if image_first else 3,
+            force_image_at=0 if image_first else int(
+                self._cfg.backend_args.get("force_image_at", 96)
+            ),
+            image_first=image_first,
+            max_images=max_images,
+            followup=followup,
             **kw,
         )

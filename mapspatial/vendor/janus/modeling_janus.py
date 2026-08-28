@@ -1238,8 +1238,14 @@ class Janus(PreTrainedModel):
         **kwargs,
     ):
         images_embeds = self.aligner(self.vision_model(pixel_values))
+        # Vision tower returns [N, T, D]; image_mask indexes N*T token slots.
+        # N=1 broadcasts ([1, T, D] → [T, D]); N>1 must be flattened.
+        if images_embeds.dim() == 3:
+            images_embeds = images_embeds.reshape(-1, images_embeds.shape[-1])
         inputs_embeds = self.language_model.get_input_embeddings()(input_ids)
-        inputs_embeds[image_mask] = images_embeds
+        inputs_embeds[image_mask] = images_embeds.to(
+            dtype=inputs_embeds.dtype, device=inputs_embeds.device,
+        )
         return inputs_embeds
 
     def prepare_gen_img_embeds(self, image_ids: torch.LongTensor):

@@ -74,6 +74,7 @@ class RunConfig:
     store_question: bool = False
     no_save_generated: bool = False
     no_system_prompt: bool = False
+    max_samples: int = 0
     rank: int = 0
     world_size: int = 1
 
@@ -117,6 +118,7 @@ def load_run_config(
     store_question: bool = False,
     no_save_generated: bool = False,
     no_system_prompt: bool = False,
+    max_samples: int = 0,
     rank: int = 0,
     world_size: int = 1,
 ) -> RunConfig:
@@ -137,6 +139,7 @@ def load_run_config(
         store_question=store_question,
         no_save_generated=no_save_generated,
         no_system_prompt=no_system_prompt,
+        max_samples=max_samples,
         rank=rank,
         world_size=world_size,
     )

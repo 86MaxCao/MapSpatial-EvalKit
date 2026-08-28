@@ -88,5 +88,6 @@ def _available_strategies(caps: Capabilities) -> list[str]:
         s.append("native_interleave")
     if caps.draw:
         s.append("external_draw")
+    if getattr(caps, "forced_interleave", False):
         s.append("forced_interleave")
     return s

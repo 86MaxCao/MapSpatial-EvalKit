@@ -61,6 +61,7 @@ class U1Backend(Backend):
         native_interleave=False,
         max_images=24,
         video=False,
+        forced_interleave=True,
     )
     COMPAT: ClassVar[tuple[str, ...]] = ()
 
@@ -306,7 +307,9 @@ class U1Backend(Backend):
                     timestep_shift=3.0,
                     num_steps=num_steps,
                     seed=seed,
-                    think_mode=self._think_mode,
+                    # it2i think_mode conditions diffusion; think text is discarded
+                    # and is not protocol T0. False yields near-white/black images.
+                    think_mode=True,
                 )
         finally:
             if _orig_dtype == torch.bfloat16:
@@ -336,18 +339,23 @@ class U1Backend(Backend):
     def interleave(
         self,
         message: Message,
+        instruction: str = "",
         *,
         max_rounds: int = 3,
         marker: str = "<image>",
         force_image_at: int = 0,
+        force_image_first: bool = False,
+        followup: str = "",
+        max_images: int | None = None,
         **kw,
     ) -> Prediction:
         """Interleaved text + image generation via model.interleave_gen().
 
-        NOTE: with ``force_image_at=0`` this is the marker-driven (native)
-        mode, which does not fire under MapSpatial VQA-style prompts — it is
-        kept only as the engine for ``forced_interleave()`` and is not
-        registered as a strategy (caps.native_interleave=False).
+        NOTE: with ``force_image_at=0`` and ``force_image_first=False`` this
+        is the marker-driven (native) mode, which does not fire under
+        MapSpatial VQA-style prompts — it is kept only as the engine for
+        ``forced_interleave()`` and is not registered as a strategy
+        (caps.native_interleave=False).
 
         When <img> is emitted (or injected), flow-matching image generation
         kicks in, the result is re-encoded back into the KV cache, and text
@@ -367,6 +375,8 @@ class U1Backend(Backend):
                 text_parts.append(item)
             else:
                 pil_images.append(item)
+        if instruction:
+            text_parts.append(instruction)
 
         prompt = strip_placeholders("\n".join(text_parts))
 
@@ -374,7 +384,13 @@ class U1Backend(Backend):
         cfg_scale = kw.get("cfg_scale", self._cfg_scale)
         num_steps = kw.get("num_steps", self._num_steps)
         seed = kw.get("seed", self._seed)
-        think_mode = kw.get("think_mode", self._think_mode)
+        # Open <think> prefix (official gen layout). force_image_first still
+        # skips sampling think tokens, so this is not pre-image T0.
+        if force_image_first:
+            think_mode = True
+        else:
+            think_mode = kw.get("think_mode", self._think_mode)
+        n_images = max_images if max_images is not None else max_rounds
 
         # Cast model to float32 for generation (same as draw())
         _orig_dtype = next(self._model.parameters()).dtype
@@ -395,8 +411,11 @@ class U1Backend(Backend):
                     num_steps=num_steps,
                     seed=seed,
                     think_mode=think_mode,
-                    max_images=max_rounds,
-                    force_image_at=force_image_at,
+                    max_images=n_images,
+                    force_image_at=0 if force_image_first else force_image_at,
+                    force_image_first=force_image_first,
+                    followup=followup or "",
+                    ready_image=kw.get("ready_image"),
                 )
         finally:
             if _orig_dtype == torch.bfloat16:
@@ -434,10 +453,11 @@ class U1Backend(Backend):
                 trace.append(TraceStep(
                     round=round_num,
                     kind="image",
-                    triggered_by="forced" if (force_image_at > 0 and img_idx == 0) else "model_marker",
+                    triggered_by="forced_image_first" if force_image_first else (
+                        "forced" if (force_image_at > 0 and img_idx == 0) else "model_marker"
+                    ),
                     elapsed_s=elapsed_per,
                 ))
-                # PIL image stored in the image field via generated_images
                 img_idx += 1
                 round_num += 1
 
@@ -449,33 +469,51 @@ class U1Backend(Backend):
                 "rounds": round_num,
                 "draw_triggered": len(pil_generated) > 0,
                 "backend": self.model_name,
+                "pre_image_text_tokens": 0 if force_image_first else None,
+                "reconsume_mode": "pixel",
+                "post_image_prompt_mode": "followup_appended" if followup else None,
             },
         )
 
     def forced_interleave(
         self,
         message: Message,
+        instruction: str = "",
         *,
-        max_rounds: int = 1,
-        force_image_at: int | None = None,
+        max_images: int = 1,
+        image_first: bool = True,
+        followup: str = "",
         **kw,
     ) -> Prediction:
-        """Forced interleaved reasoning — no marker needed.
+        """Image-first stateful G2U on a shared KV cache.
 
-        U1 rarely emits '<img>' under MapSpatial VQA-style prompts (native
-        interleave measured 0% draw rate), so the marker is injected after
-        ``force_image_at`` reasoning tokens (or at EOS) of the first round
-        and the shared-KV flow continues to the final answer.
-
-        think_mode defaults to True here so the model produces reasoning
-        text before the forced image instead of an immediate answer.
+        I0 comes from the same it2i ``draw()`` path as C-R (avoids the
+        near-white in-loop diffusion). The PIL is then reconsumed into the
+        interleave prefix KV for the answer.
         """
-        if force_image_at is None:
-            force_image_at = int(self._cfg.backend_args.get("force_image_at", 256))
-        kw.setdefault("think_mode", True)
+        kw = dict(kw)
+        kw.pop("max_images", None)
+        kw.pop("image_first", None)
+        kw.pop("followup", None)
+        kw.pop("think_mode", None)
+        ready = None
+        if image_first:
+            import numpy as np
+            pil = self.draw(message, instruction, **kw)
+            arr = np.asarray(pil.convert("RGB"), dtype=np.float32) / 255.0
+            ready = torch.from_numpy(arr).permute(2, 0, 1).unsqueeze(0)
+            ready = ready * 2.0 - 1.0
         return self.interleave(
             message,
-            max_rounds=max_rounds,
-            force_image_at=force_image_at,
+            instruction=instruction,
+            max_rounds=max_images,
+            max_images=max_images,
+            force_image_at=0 if image_first else int(
+                self._cfg.backend_args.get("force_image_at", 256)
+            ),
+            force_image_first=image_first,
+            followup=followup,
+            think_mode=True,
+            ready_image=ready,
             **kw,
         )

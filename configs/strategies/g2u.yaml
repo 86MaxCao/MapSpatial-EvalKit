@@ -1,0 +1,31 @@
+# Shared G2U protocol for external_draw (C-R) and forced_interleave (C-F).
+# image-first, single generated image. Do not use this file for direct / native.
+
+protocol: image_first_single_image
+max_generated_images: 1
+image_first: true
+seed: 42
+save_generated: true
+
+generation_system_prompt: >
+  Generate exactly one answer-agnostic visual scratchpad that helps solve
+  the spatial question. Do not write the final answer, an option letter,
+  or explanatory text into the image. After the visual scratchpad has been
+  incorporated, answer the original question.
+
+understand_followup: >
+  Use the generated visual evidence to answer the original question.
+
+draw_instruction:
+  direction: "Draw one blue arrow that represents the queried direction between the named points. Do not add text or answer choices."
+  directional_nearest_point: "Draw blue measurement lines from the reference point to the named candidate points. Do not add text or answer choices."
+  dual_anchor_direction: "Draw the blue reference rays or arrows needed to show which candidate satisfies both directional constraints. Do not add text or answer choices."
+  egocentric_side: "Draw a blue forward axis from the reference point toward the facing point, plus a blue mark for the queried point. Do not add text or answer choices."
+  angular_order: "Draw blue rays from the reference point to all named candidates so their clockwise angular order is visible. Do not add text or answer choices."
+  nearest_point: "Draw blue measurement lines from the reference point to every named candidate point. Do not add text or answer choices."
+  composite_euclidean_distance: "Draw the blue straight-line segments for the compared point-to-point alternatives. Do not add text or answer choices."
+  composite_network_distance: "Draw the blue network-route geometry for each compared alternative, including via points when present. Do not add text or answer choices."
+  segment_building_count: "Highlight the queried route segment and the relevant side with a blue line or boundary mark. Do not add text or answer choices."
+  route_cumulative_count: "Highlight the queried route and the counted building-side regions with blue marks. Do not add text or answer choices."
+  route_validity: "The input contains four separate candidate-route images. In each image, draw only answer-agnostic blue route evidence. The final task is to choose the passable route that does not cross buildings or forbidden regions. Do not write the answer or option letter."
+  waypoint_ordering: "Draw a continuous blue route line through the named waypoints in their spatial order. Do not add text or answer choices."

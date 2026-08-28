@@ -21,11 +21,18 @@ def test_external_draw_strategy():
 
 
 def test_all_three_strategies():
-    """direct, native_interleave, external_draw all registered."""
+    """direct, native_interleave, external_draw, forced_interleave registered."""
     strats = available_strategies()
     assert "direct" in strats
     assert "native_interleave" in strats
     assert "external_draw" in strats
+    assert "forced_interleave" in strats
+
+
+def test_forced_interleave_strategy():
+    strat = get_strategy("forced_interleave")
+    assert strat.name == "forced_interleave"
+    assert strat.required_caps() == {"forced_interleave": True}
 
 
 def test_strategy_validation_pass():
@@ -62,6 +69,7 @@ def test_bagel_caps():
     assert cls.caps.draw is True
     assert cls.caps.native_interleave is True
     assert cls.caps.batch is True
+    assert cls.caps.forced_interleave is True
 
 
 def test_thinkmorph_caps():
@@ -69,6 +77,7 @@ def test_thinkmorph_caps():
     cls = get_backend_cls("veomni_thinkmorph")
     assert cls.caps.draw is True
     assert cls.caps.native_interleave is True
+    assert cls.caps.forced_interleave is True
 
 
 def test_thinkmorph_inherits_bagel():
@@ -87,6 +96,7 @@ def test_bagel_config_loads():
     assert "direct" in cfg.strategies
     assert "native_interleave" in cfg.strategies
     assert "external_draw" in cfg.strategies
+    assert "forced_interleave" in cfg.strategies
 
 
 def test_thinkmorph_config_loads():
@@ -109,5 +119,36 @@ def test_vendor_inferencer_importable():
     try:
         from mapspatial.vendor.bagel_interleave.inferencer import InterleaveInferencer
         assert InterleaveInferencer is not None
+        assert hasattr(InterleaveInferencer, "image_first_inference")
     except ImportError:
         pass  # May need torch/torchvision at runtime
+
+
+def test_umm_forced_interleave_caps():
+    assert get_backend_cls("veomni_u1").caps.forced_interleave is True
+    assert get_backend_cls("veomni_latentum").caps.forced_interleave is True
+    assert get_backend_cls("veomni_janus").caps.forced_interleave is False
+    assert get_backend_cls("veomni_showo2").caps.forced_interleave is False
+    assert get_backend_cls("veomni_blip3o").caps.forced_interleave is False
+    assert get_backend_cls("veomni_joyai").caps.forced_interleave is False
+
+
+def test_forced_interleave_not_listed_for_draw_only():
+    from mapspatial.strategies.base import _available_strategies
+    from mapspatial.types import Capabilities
+    caps = Capabilities(
+        batch=False, draw=True, native_interleave=False, max_images=1, video=False,
+    )
+    names = _available_strategies(caps)
+    assert "external_draw" in names
+    assert "forced_interleave" not in names
+
+
+def test_forced_interleave_listed_when_capped():
+    from mapspatial.strategies.base import _available_strategies
+    from mapspatial.types import Capabilities
+    caps = Capabilities(
+        batch=False, draw=True, native_interleave=False, max_images=1, video=False,
+        forced_interleave=True,
+    )
+    assert "forced_interleave" in _available_strategies(caps)

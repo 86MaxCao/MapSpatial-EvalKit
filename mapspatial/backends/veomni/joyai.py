@@ -175,13 +175,19 @@ class JoyAIBackend(Backend):
             pad_token_id=eos_id,
         )
 
+        vision_keys = (
+            "pixel_values", "image_grid_thw",
+            "pixel_values_videos", "video_grid_thw",
+            "mm_token_type_ids", "second_per_grid_ts",
+        )
+        extra = {k: inputs[k] for k in vision_keys if k in inputs}
+
         with torch.no_grad():
             output_ids = model.generate_text(
                 input_ids=inputs["input_ids"],
                 attention_mask=inputs["attention_mask"],
-                pixel_values=inputs.get("pixel_values"),
-                image_grid_thw=inputs.get("image_grid_thw"),
                 generation_config=gen_config,
+                **extra,
             )
 
         # Unwrap if HF GenerateOutput
@@ -197,12 +203,7 @@ class JoyAIBackend(Backend):
     # ------------------------------------------------------------------
 
     def draw(self, context: Message, instruction: str, **kw) -> "Image.Image":
-        """Generate an image via JoyAIImageModel.generate_image() (DiT+VAE pipeline).
-
-        Uses the model's built-in generation pipeline (built during
-        load_weights_from_checkpoint) which combines Qwen3VL text encoder,
-        MMDiT transformer, and Wan2.1 VAE.
-        """
+        """Generate an image via EditModel.infer() (I2I) or generate_image() fallback."""
         import torch
         from PIL import Image
 
@@ -221,9 +222,34 @@ class JoyAIBackend(Backend):
         guidance_scale = kw.get("guidance_scale", self._gen_guidance)
         seed = kw.get("seed", self._gen_seed)
 
+        if context_images:
+            from PIL import Image as PILImage
+            context_images = [
+                im.convert("RGB").resize((int(width), int(height)), PILImage.Resampling.LANCZOS)
+                if im.size != (int(width), int(height)) else im.convert("RGB")
+                for im in context_images
+            ]
+
         with torch.no_grad():
-            # Use JoyAIImageModel's built-in generate_image method
-            # Pass context images for image-conditioned generation (I2I)
+            if self._gen_model is not None:
+                from ...vendor.joyai_image.infer_runtime.model import InferenceParams
+                basesize = min(height, width)
+                if basesize not in (256, 512, 768, 1024):
+                    basesize = 1024 if max(height, width) >= 1024 else 512
+                params = InferenceParams(
+                    prompt=prompt,
+                    image=context_images[0] if context_images else None,
+                    height=height,
+                    width=width,
+                    steps=steps,
+                    guidance_scale=guidance_scale,
+                    seed=seed,
+                    neg_prompt="",
+                    basesize=basesize,
+                )
+                return self._gen_model.infer(params)
+
+            # Fallback: und_model pipeline (generate_image wraps I2I pads)
             output = self._und_model.generate_image(
                 prompt=prompt,
                 images=context_images if context_images else None,
@@ -247,14 +273,18 @@ class JoyAIBackend(Backend):
                     return item
         if hasattr(output, "shape"):
             import numpy as np
-            # JoyAI pipeline returns 6D tensor: (1, 1, 1, C, H, W)
+            # Pipeline output is (B, N, T, C, H, W). I2I uses N>1 (refs + generated);
+            # squeeze(0) would infinite-loop when dim0 != 1. Take the last item's
+            # first frame, matching EditModel.infer().
             t = output
-            while t.ndim > 4:
-                t = t.squeeze(0)
-            if t.ndim == 4:
-                t = t[0]  # take first batch
-            # t should be (C, H, W) now — pipeline already returns [0,1]
-            pixels = (t.clamp(0, 1) * 255).cpu().permute(1, 2, 0).numpy().astype("uint8")
+            if t.ndim == 6:
+                t = t[0, -1, 0]
+            else:
+                while t.ndim > 3 and t.shape[0] == 1:
+                    t = t.squeeze(0)
+                if t.ndim == 4:
+                    t = t[-1]
+            pixels = (t.float().clamp(0, 1) * 255).cpu().permute(1, 2, 0).numpy().astype("uint8")
             return Image.fromarray(pixels)
 
         raise RuntimeError("JoyAI generate_image() did not produce an image")

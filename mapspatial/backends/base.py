@@ -48,3 +48,16 @@ class Backend(ABC):
     def interleave(self, message: Message, *, max_rounds: int, **kw) -> Prediction:
         """Native interleaved reasoning loop. Only for caps.native_interleave=True."""
         raise NotImplementedError(f"{self.model_name} does not support interleave()")
+
+    def forced_interleave(
+        self,
+        message: Message,
+        instruction: str = "",
+        *,
+        max_images: int = 1,
+        image_first: bool = True,
+        followup: str = "",
+        **kw,
+    ) -> Prediction:
+        """Stateful image-first G2U. Only for caps.forced_interleave=True."""
+        raise NotImplementedError(f"{self.model_name} does not support forced_interleave()")

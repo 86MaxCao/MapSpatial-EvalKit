@@ -44,6 +44,7 @@ def cmd_run(args: argparse.Namespace) -> None:
         store_question=args.store_question,
         no_save_generated=args.no_save_generated,
         no_system_prompt=args.no_system_prompt,
+        max_samples=args.max_samples,
         rank=rank,
         world_size=world_size,
     )
@@ -255,6 +256,10 @@ def main():
         action="store_true",
         help="Don't inject the benchmark record's system_prompt (e.g. for think runs, "
         "where 'return only the option letter, no explanation' conflicts with CoT)",
+    )
+    p_run.add_argument(
+        "--max-samples", type=int, default=0,
+        help="Cap samples per (view, task, variant) cell (0=all). For smoke tests.",
     )
     p_run.set_defaults(func=cmd_run)
 
