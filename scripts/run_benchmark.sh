@@ -50,6 +50,7 @@ while [[ $# -gt 0 ]]; do
         --tasks)      TASKS="$2"; shift 2 ;;
         --variants)   VARIANTS="$2"; shift 2 ;;
         --replay-i0-from) EXTRA+=("$1" "$2"); shift 2 ;;
+        --g2u-scratchpad) EXTRA+=("$1" "$2"); shift 2 ;;
         -*)           EXTRA+=("$1"); shift ;;
         *)
             if [[ -z "$MODEL" ]]; then

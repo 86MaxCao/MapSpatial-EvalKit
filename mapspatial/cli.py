@@ -48,6 +48,7 @@ def cmd_run(args: argparse.Namespace) -> None:
         rank=rank,
         world_size=world_size,
         replay_i0_from=args.replay_i0_from,
+        g2u_scratchpad=args.g2u_scratchpad,
     )
 
     run(cfg)
@@ -266,6 +267,14 @@ def main():
         "--replay-i0-from", default=None,
         help="Reuse generated I0 PNGs from a previous result root and skip G "
              "(U-only C-R). Looks up {dir}/{model}/external_draw/generated/...",
+    )
+    p_run.add_argument(
+        "--g2u-scratchpad",
+        choices=["typed", "autonomous"],
+        default="typed",
+        help="G2U scratchpad policy (external_draw / forced_interleave only). "
+             "typed=per-question_type draw instructions (default). "
+             "autonomous=generic G prompt; U may ignore the scratchpad.",
     )
     p_run.set_defaults(func=cmd_run)
 

@@ -1,11 +1,31 @@
 # Shared G2U protocol for external_draw (C-R) and forced_interleave (C-F).
 # image-first, single generated image. Do not use this file for direct / native.
+#
+# scratchpad_policy:
+#   typed        — per-question_type draw_instruction (default; previous C-R).
+#   autonomous   — generic G prompt; U may ignore the scratchpad.
+# Override per run with --g2u-scratchpad without editing this file.
 
 protocol: image_first_single_image
 max_generated_images: 1
 image_first: true
 seed: 42
 save_generated: true
+scratchpad_policy: typed
+
+autonomous_generation_prompt: >
+  If a visual scratchpad would help you reason about the spatial question,
+  generate exactly one answer-agnostic sketch (no option letter, no final
+  answer, no explanatory text in the image). You decide what to mark.
+  If the original map image(s) are already sufficient, produce only a
+  minimal non-answer sketch rather than inventing a solution diagram.
+
+autonomous_understand_followup: >
+  The last image may be a generated visual scratchpad. It is not an
+  original map and not an answer option. Use it only if it is faithful
+  to the original map(s) and actually helps. If it conflicts with the
+  original map(s) or does not help, ignore it and answer from the
+  original map image(s) alone.
 
 generation_system_prompt: >
   Generate exactly one answer-agnostic visual scratchpad that helps solve

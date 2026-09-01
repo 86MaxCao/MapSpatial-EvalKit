@@ -128,12 +128,19 @@ class RunContext:
     )
     generation_system_prompt: str = ""
     g2u_seed: int = 42
+    scratchpad_policy: str = "typed"
     view: str = ""
     task: str = ""
     variant: str = ""
 
     @property
     def understand_followup(self) -> str:
+        if self.scratchpad_policy == "autonomous":
+            text = str(
+                _load_g2u_config().get("autonomous_understand_followup") or ""
+            ).strip()
+            if text:
+                return text
         return self.draw_followup_text
 
     def draw_instruction(self, sample: TaskSample) -> str:
@@ -145,7 +152,22 @@ class RunContext:
         return _DRAW_INSTRUCTIONS.get(qt, "Draw a helpful intermediate diagram.")
 
     def visual_generation_instruction(self, sample: TaskSample) -> str:
-        """G-stage instruction: shared system prompt + question-type draw text."""
+        """G-stage instruction.
+
+        typed: shared system prompt + question-type draw text (default).
+        autonomous: one generic prompt; no per-type draw_instruction.
+        """
+        if self.scratchpad_policy == "autonomous":
+            text = str(
+                _load_g2u_config().get("autonomous_generation_prompt") or ""
+            ).strip()
+            if text:
+                return text
+            return (
+                self.generation_system_prompt
+                or _load_g2u_config().get("generation_system_prompt")
+                or ""
+            ).strip()
         parts = []
         sys_p = (self.generation_system_prompt or _load_g2u_config().get("generation_system_prompt") or "").strip()
         if sys_p:

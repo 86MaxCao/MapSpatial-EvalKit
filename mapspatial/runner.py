@@ -250,6 +250,9 @@ def run(
             ),
         generation_system_prompt=str(g2u.get("generation_system_prompt") or "").strip(),
         g2u_seed=int(g2u.get("seed") or 42),
+        scratchpad_policy=cfg.g2u_scratchpad or str(
+            g2u.get("scratchpad_policy") or "typed"
+        ).strip() or "typed",
     )
 
     # Result output directory

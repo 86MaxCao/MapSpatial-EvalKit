@@ -49,6 +49,25 @@ def test_run_context_g2u_defaults():
     )
     inst = ctx.visual_generation_instruction(sample)
     assert "arrow" in inst.lower() or "direction" in inst.lower()
+    assert ctx.scratchpad_policy == "typed"
+
+
+def test_run_context_autonomous_scratchpad_does_not_use_typed_draw():
+    ctx = RunContext(output_dir=Path("/tmp"), scratchpad_policy="autonomous")
+    sample = TaskSample(
+        id="x",
+        message=[{"type": "text", "value": "q"}],
+        gold="A",
+        meta={"question_type": "direction"},
+    )
+    inst = ctx.visual_generation_instruction(sample)
+    assert "blue arrow" not in inst.lower()
+    assert "you decide" in inst.lower() or "if a visual scratchpad" in inst.lower()
+    follow = ctx.understand_followup.lower()
+    assert "ignore" in follow
+    typed = RunContext(output_dir=Path("/tmp"), scratchpad_policy="typed")
+    typed_inst = typed.visual_generation_instruction(sample)
+    assert "arrow" in typed_inst.lower() or "direction" in typed_inst.lower()
 
 
 def test_task_sample_gold_isolation():

@@ -78,6 +78,7 @@ class RunConfig:
     rank: int = 0
     world_size: int = 1
     replay_i0_from: Path | None = None
+    g2u_scratchpad: str = "typed"
 
     @property
     def effective_batch_size(self) -> int:
@@ -123,6 +124,7 @@ def load_run_config(
     rank: int = 0,
     world_size: int = 1,
     replay_i0_from: str | Path | None = None,
+    g2u_scratchpad: str = "typed",
 ) -> RunConfig:
     """Build a RunConfig from a model YAML + CLI overrides."""
     model = load_model_config(model_config_path)
@@ -145,4 +147,5 @@ def load_run_config(
         rank=rank,
         world_size=world_size,
         replay_i0_from=Path(replay_i0_from) if replay_i0_from else None,
+        g2u_scratchpad=g2u_scratchpad or "typed",
     )
