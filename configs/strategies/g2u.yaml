@@ -14,7 +14,9 @@ generation_system_prompt: >
   incorporated, answer the original question.
 
 understand_followup: >
-  Use the generated visual evidence to answer the original question.
+  The last image is a generated visual scratchpad, not an original map
+  and not an answer option. Use it together with the original map
+  image(s) to answer the original question.
 
 draw_instruction:
   direction: "Draw one blue arrow that represents the queried direction between the named points. Do not add text or answer choices."

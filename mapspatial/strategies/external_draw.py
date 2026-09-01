@@ -61,48 +61,66 @@ class ExternalDrawStrategy(Strategy):
         sample: TaskSample,
         ctx: RunContext,
     ) -> Prediction:
-        instruction = ctx.visual_generation_instruction(sample)
         followup_text = ctx.understand_followup
-
-        t0 = time.time()
-        img = backend.draw(
-            sample.message, instruction, seed=ctx.g2u_seed, **ctx.gen_kw,
-        )
-        elapsed_draw = time.time() - t0
-
+        replay = sample.meta.get("replay_i0")
         img_path = None
         img_hash = ""
-        if img is not None:
-            if ctx.save_generated:
-                gen_dir = (
-                    ctx.output_dir / backend.model_name / self.name / "generated"
-                    / ctx.view / ctx.task / ctx.variant
-                )
-                gen_dir.mkdir(parents=True, exist_ok=True)
-                img_path = gen_dir / f"{sample.id}_r0.png"
-                img.save(str(img_path))
-            else:
-                fd, tmp = tempfile.mkstemp(suffix=".png")
-                os.close(fd)
-                img.save(tmp)
-                img_path = Path(tmp)
-            if img_path.exists():
-                img_hash = _sha256(img_path)
+        elapsed_draw = 0.0
+
+        if replay:
+            # Reuse a previously generated I0; skip G. Used by C-R-replay
+            # and by U-only re-runs after a prompt change.
+            img_path = Path(replay)
+            if not img_path.exists():
+                raise FileNotFoundError(f"replay_i0 not found: {img_path}")
+            img_hash = _sha256(img_path)
+        else:
+            instruction = ctx.visual_generation_instruction(sample)
+            t0 = time.time()
+            img = backend.draw(
+                sample.message, instruction, seed=ctx.g2u_seed, **ctx.gen_kw,
+            )
+            elapsed_draw = time.time() - t0
+            if img is not None:
+                if ctx.save_generated:
+                    gen_dir = (
+                        ctx.output_dir / backend.model_name / self.name / "generated"
+                        / ctx.view / ctx.task / ctx.variant
+                    )
+                    gen_dir.mkdir(parents=True, exist_ok=True)
+                    img_path = gen_dir / f"{sample.id}_r0.png"
+                    img.save(str(img_path))
+                else:
+                    fd, tmp = tempfile.mkstemp(suffix=".png")
+                    os.close(fd)
+                    img.save(tmp)
+                    img_path = Path(tmp)
+                if img_path.exists():
+                    img_hash = _sha256(img_path)
 
         trace = [TraceStep(
             round=0, kind="image",
             image=img_path,
-            triggered_by="forced_image_first",
+            triggered_by="replay_i0" if replay else "forced_image_first",
             elapsed_s=elapsed_draw,
         )]
 
-        # Original message (question + source images) already present.
-        # Append G instruction (real G history), then I0, then follow-up.
-        augmented_msg = list(sample.message) + [
-            {"type": "text", "value": instruction},
-            {"type": "image", "value": img_path},
-            {"type": "text", "value": followup_text},
-        ]
+        # U is original question + original maps + labeled I0 + follow-up.
+        # Do not re-append the G instruction: it is generation-only, and
+        # stuffing it into U ("do not write an option letter") contaminates
+        # the answer turn. See docs/14 §2.2.
+        augmented_msg = list(sample.message)
+        if img_path is not None:
+            augmented_msg.append({
+                "type": "text",
+                "value": (
+                    "Generated visual scratchpad "
+                    "(not an original map and not an answer option):"
+                ),
+            })
+            augmented_msg.append({"type": "image", "value": img_path})
+        if followup_text:
+            augmented_msg.append({"type": "text", "value": followup_text})
 
         t0 = time.time()
         messages = self._inject_system_prompt([augmented_msg], ctx.gen_kw)

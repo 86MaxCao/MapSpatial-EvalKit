@@ -47,3 +47,5 @@ _ensure_namespace("cambrian", os.path.join(_VDIR, "cambrian", "cambrian_pkg"))
 _ensure_namespace("models.cambrian", os.path.join(_VDIR, "cambrian", "cambrian_pkg"))
 _ensure_namespace("models.sensenova_si", os.path.join(_VDIR, "sensenova_si_pkg"))
 _ensure_namespace("utils", os.path.join(_VDIR, "vilasr_utils"))
+# Official LatentUM is the `model` package (model.latentum / model.decoder).
+_ensure_namespace("model", os.path.join(_VDIR, "latentum"))

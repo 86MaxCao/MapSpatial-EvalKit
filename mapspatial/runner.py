@@ -53,6 +53,21 @@ def load_completed(path: Path) -> tuple[set[str], int]:
     return done, corrupt
 
 
+def _replay_i0_path(i0_dir: Path, sample_id: str) -> Path | None:
+    """Resolve a saved I0 PNG for U-only replay.
+
+    T3 option-shuffle records keep the original maps but may suffix the id
+    with ``_optsh``; the PNG was saved under the pre-shuffle id.
+    """
+    candidates = [i0_dir / f"{sample_id}_r0.png"]
+    if sample_id.endswith("_optsh"):
+        candidates.append(i0_dir / f"{sample_id[: -len('_optsh')]}_r0.png")
+    for path in candidates:
+        if path.exists():
+            return path
+    return None
+
+
 def write_result(path: Path, record: dict) -> None:
     """Atomic single-line write to JSONL. No half-lines on crash."""
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -228,7 +243,11 @@ def run(
         view="", task="", variant="",
         save_generated=not cfg.no_save_generated,
         draw_followup_text=str(g2u.get("understand_followup") or "").strip()
-            or "Use the generated visual evidence to answer the original question.",
+            or (
+                "The last image is a generated visual scratchpad, not an original map "
+                "and not an answer option. Use it together with the original map "
+                "image(s) to answer the original question."
+            ),
         generation_system_prompt=str(g2u.get("generation_system_prompt") or "").strip(),
         g2u_seed=int(g2u.get("seed") or 42),
     )
@@ -277,6 +296,37 @@ def run(
         if cfg.max_samples and cfg.max_samples > 0:
             pending = pending[: max(0, cfg.max_samples - len(done_ids))]
             samples = samples[: cfg.max_samples]
+
+        if cfg.replay_i0_from is not None:
+            i0_dir = (
+                cfg.replay_i0_from
+                / cfg.model.name
+                / strategy_name
+                / "generated"
+                / view
+                / task
+                / variant
+            )
+            kept = []
+            skipped = 0
+            for s in pending:
+                i0 = _replay_i0_path(i0_dir, s.id)
+                if i0 is not None:
+                    s.meta["replay_i0"] = str(i0)
+                    kept.append(s)
+                else:
+                    skipped += 1
+            if skipped:
+                print(
+                    f"WARNING: {skipped}/{skipped + len(kept)} samples missing I0 "
+                    f"under {i0_dir}, skipping those",
+                    file=sys.stderr,
+                )
+            if pending and not kept:
+                raise FileNotFoundError(
+                    f"replay-i0-from: 0 I0 found under {i0_dir}"
+                )
+            pending = kept
 
         # Striped split for multi-GPU
         if cfg.world_size > 1:

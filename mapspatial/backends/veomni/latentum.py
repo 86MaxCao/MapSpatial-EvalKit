@@ -9,10 +9,8 @@ InternVL2.5 chat template, and LLM generate with KV cache.
 from __future__ import annotations
 
 import os
-import sys
 import time
 from copy import deepcopy
-from pathlib import Path
 from typing import ClassVar
 
 import torch
@@ -23,9 +21,7 @@ from ...config import BackendConfig
 from ...compat import apply as apply_compat
 from ...messages import to_interleave_list, strip_placeholders
 from ..base import Backend
-
-# Official LatentUM repo root
-_OFFICIAL_REPO = "/home/ximeng.czq/caoziqi/code/SpatialIntelligence/generative-spatial-drafts/ablation_experiment/LatentUM"
+from ... import vendor as _vendor  # noqa: F401  — registers model.latentum / model.decoder
 
 
 class LatentUMBackend(Backend):
@@ -57,9 +53,7 @@ class LatentUMBackend(Backend):
         dtype = cfg.load.get("dtype", "bfloat16")
         dt = getattr(torch, dtype)
 
-        # Load via official LatentUMModel.from_pretrained
-        if _OFFICIAL_REPO not in sys.path:
-            sys.path.insert(0, _OFFICIAL_REPO)
+        # Load via official LatentUMModel.from_pretrained (vendored)
         from model.latentum import LatentUMModel
 
         self._model = LatentUMModel.from_pretrained(model_path, device=device, dtype=dt)
@@ -90,10 +84,25 @@ class LatentUMBackend(Backend):
 
         # System prompt
         self._system_prompt = cfg.system_prompt or None
+        self._decoder = None
 
     @property
     def model_name(self) -> str:
         return self._cfg.name
+
+    def _get_decoder(self):
+        """Lazy-load and cache the pixel decoder (sibling checkpoint)."""
+        if self._decoder is not None:
+            return self._decoder
+        decoder_path = self._cfg.backend_args.get("decoder_path", "")
+        if not decoder_path:
+            raise RuntimeError("No decoder available for image generation")
+        from model.latentum.modeling_latentum import LatentUMDecoderModel
+        decoder = LatentUMDecoderModel.from_pretrained(
+            decoder_path, device=self._device, dtype=torch.bfloat16,
+        )
+        self._decoder = decoder.eval()
+        return self._decoder
 
     # ------------------------------------------------------------------
     # understand()
@@ -180,72 +189,33 @@ class LatentUMBackend(Backend):
     # ------------------------------------------------------------------
 
     def draw(self, context: Message, instruction: str, **kw):
-        """Generate an image via official model.generate_latents + decoder.
+        """Image-first G: condition on input maps, emit one image, drop KV.
 
-        If context images are present, uses generate_latents_with_images()
-        for image-conditioned generation (I2I). Otherwise falls back to
-        text-only generate_latents() (T2I).
+        Official LatentUM only exposes text-only ``generate_latents()``.
+        ``generate_latents_with_images`` does not exist, so the previous
+        hasattr fallback was silent T2I and ignored the source map. Use the
+        same image-conditioned prefill as ``interleave(image_first=True)``.
         """
-        text_parts = []
-        context_images = []
-        for item in context:
-            if item["type"] == "text":
-                text_parts.append(item["value"])
-            elif item["type"] == "image":
-                v = item["value"]
-                if isinstance(v, (Path, str)):
-                    from ...media import load_image as _load_pil
-                    v = _load_pil(v)
-                context_images.append(v)
-
-        context_text = "\n".join(text_parts)
-        full_prompt = f"{context_text}\n{instruction}" if context_text else instruction
-
-        cfg_scale = kw.get("cfg_scale", self._cfg_scale)
-        temperature = kw.get("temperature", self._draw_temperature)
-        seed = kw.get("seed", 42)
-
-        with torch.no_grad():
-            if context_images and hasattr(self._model, 'generate_latents_with_images'):
-                # Image-conditioned generation (I2I)
-                latents = self._model.generate_latents_with_images(
-                    context_images,
-                    full_prompt,
-                    num_images_per_prompt=1,
-                    cfg_scale=cfg_scale,
-                    temperature=temperature,
-                    seed=seed,
-                )
-            else:
-                # Text-only generation (T2I) — no context images
-                latents = self._model.generate_latents(
-                    full_prompt,
-                    num_images_per_prompt=1,
-                    cfg_scale=cfg_scale,
-                    temperature=temperature,
-                    seed=seed,
-                )
-
-        # Decode latents to image using external decoder if available.
-        # The decoder is a sibling checkpoint (e.g. LatentUM-Decoder), not a
-        # subdirectory of the main model.  Follow the official generate_images()
-        # pipeline: convert latent token IDs to continuous features via the
-        # quantizer, then call decoder.decode() which runs SD3.5 + VAE.
-        decoder_path = self._cfg.backend_args.get("decoder_path", "")
-        if decoder_path:
-            from model.latentum.modeling_latentum import LatentUMDecoderModel
-            decoder = LatentUMDecoderModel.from_pretrained(
-                decoder_path, device=self._device, dtype=torch.bfloat16,
-            )
-            decoder = decoder.eval()
-            # Official pipeline: indices_to_feature → decoder.decode → [PIL]
-            z_q, _ = self._model.quantizer.indices_to_feature(
-                latents.to(self._device),
-            )
-            images = decoder.decode(z_q, seed=seed)
-            return images[0]
-
-        raise RuntimeError("No decoder available for image generation")
+        kw = dict(kw)
+        # ar_head CFG>1 expects a concatenated (cond, uncond) batch. This
+        # path only has one hidden state, so cfg_scale must stay <= 1.
+        kw["cfg_scale"] = 1.0
+        kw.setdefault("temperature", self._draw_temperature)
+        kw.setdefault("do_sample", True)
+        pred = self.interleave(
+            context,
+            instruction=instruction,
+            max_rounds=1,
+            image_first=True,
+            max_images=1,
+            followup="",
+            **kw,
+        )
+        if pred.error:
+            raise RuntimeError(pred.error)
+        if not pred.generated_images:
+            raise RuntimeError("draw() did not produce an image")
+        return pred.generated_images[0]
 
     # ------------------------------------------------------------------
     # interleave() — native save-rewind-reinject loop
@@ -625,13 +595,8 @@ class LatentUMBackend(Backend):
 
         # -- 10. Decode generated VQ codes via decoder -------------------------
         generated_images: list[Image.Image] = []
-        decoder_path = self._cfg.backend_args.get("decoder_path", "")
-        if all_generated_codes and decoder_path:
-            from model.latentum.modeling_latentum import LatentUMDecoderModel
-            decoder = LatentUMDecoderModel.from_pretrained(
-                decoder_path, device=self._device, dtype=torch.bfloat16,
-            )
-            decoder = decoder.eval()
+        if all_generated_codes:
+            decoder = self._get_decoder()
             num_inf_steps = kw.get("num_inference_steps", 25)
             guidance_scale = kw.get("guidance_scale", 1.0)
             seed = kw.get("seed", 42)

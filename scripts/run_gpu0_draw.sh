@@ -1,15 +1,31 @@
 #!/usr/bin/env bash
-# GPU 0 — external_draw models (prioritized)
+# GPU 0 — SenseNova-U1 image-first C-R on wprd01 t4.
 set -euo pipefail
-MODELS=( "bagel-7b:external_draw" )
-VIEWS="blank,sat,webrd04,wprd01"
-TASKS="t1,t2"
-VARIANTS="base/direct"
+
+GPU=0
+MODELS_CSV="${MODELS_CSV:-sensenova-u1-8b:external_draw}"
+VIEWS="${VIEWS:-wprd01}"
+TASKS="${TASKS:-t4}"
+VARIANTS="${VARIANTS:-base/direct}"
+
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-OUTPUT_DIR="${OUTPUT_DIR:-${PROJECT_DIR}/results_draw}"
+OUTPUT_DIR="${OUTPUT_DIR:-${PROJECT_DIR}/results_draw_0830}"
 RUN_BENCH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/run_benchmark.sh"
-for ENTRY in "${MODELS[@]}"; do
-    MODEL="${ENTRY%%:*}"; STRATEGY="${ENTRY##*:}"
-    echo "===== [gpu0] ${MODEL} | ${STRATEGY} ====="
-    bash "${RUN_BENCH}" "$MODEL" --gpu 0 --strategy "$STRATEGY" --output-dir "$OUTPUT_DIR" --views "$VIEWS" --tasks "$TASKS" --variants "$VARIANTS" "$@"
+MAPSPATIAL_LIB="${MAMBA_ROOT_PREFIX:-/mnt/nas-tbt/caoziqi/micromamba}/envs/mapspatial/lib"
+export LD_LIBRARY_PATH="${MAPSPATIAL_LIB}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+mkdir -p "${OUTPUT_DIR}"
+
+IFS=',' read -r -a ENTRIES <<< "${MODELS_CSV}"
+for ENTRY in "${ENTRIES[@]}"; do
+    MODEL="${ENTRY%%:*}"
+    STRATEGY="${ENTRY##*:}"
+    echo "===== [gpu${GPU}] ${MODEL} | ${STRATEGY} | views=${VIEWS} tasks=${TASKS} variants=${VARIANTS} ====="
+    bash "${RUN_BENCH}" "$MODEL" \
+        --gpu "${GPU}" \
+        --strategy "$STRATEGY" \
+        --output-dir "$OUTPUT_DIR" \
+        --views "$VIEWS" \
+        --tasks "$TASKS" \
+        --variants "$VARIANTS" \
+        --skip-preflight
 done

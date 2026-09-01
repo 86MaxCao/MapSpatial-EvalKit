@@ -121,7 +121,11 @@ class RunContext:
     max_rounds: int = 3
     marker: str = "<image_start>"
     save_generated: bool = True
-    draw_followup_text: str = "Use the generated visual evidence to answer the original question."
+    draw_followup_text: str = (
+        "The last image is a generated visual scratchpad, not an original map "
+        "and not an answer option. Use it together with the original map "
+        "image(s) to answer the original question."
+    )
     generation_system_prompt: str = ""
     g2u_seed: int = 42
     view: str = ""

@@ -47,6 +47,7 @@ def cmd_run(args: argparse.Namespace) -> None:
         max_samples=args.max_samples,
         rank=rank,
         world_size=world_size,
+        replay_i0_from=args.replay_i0_from,
     )
 
     run(cfg)
@@ -260,6 +261,11 @@ def main():
     p_run.add_argument(
         "--max-samples", type=int, default=0,
         help="Cap samples per (view, task, variant) cell (0=all). For smoke tests.",
+    )
+    p_run.add_argument(
+        "--replay-i0-from", default=None,
+        help="Reuse generated I0 PNGs from a previous result root and skip G "
+             "(U-only C-R). Looks up {dir}/{model}/external_draw/generated/...",
     )
     p_run.set_defaults(func=cmd_run)
 

@@ -49,8 +49,16 @@ while [[ $# -gt 0 ]]; do
         --views)      VIEWS="$2"; shift 2 ;;
         --tasks)      TASKS="$2"; shift 2 ;;
         --variants)   VARIANTS="$2"; shift 2 ;;
+        --replay-i0-from) EXTRA+=("$1" "$2"); shift 2 ;;
         -*)           EXTRA+=("$1"); shift ;;
-        *)            if [[ -z "$MODEL" ]]; then MODEL="$1"; else EXTRA+=("$1"); fi; shift ;;
+        *)
+            if [[ -z "$MODEL" ]]; then
+                MODEL="$1"
+            elif [[ "$1" != "$MODEL" && "$1" != "configs/models/${MODEL}.yaml" ]]; then
+                EXTRA+=("$1")
+            fi
+            shift
+            ;;
     esac
 done
 

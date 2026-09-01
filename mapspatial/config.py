@@ -77,6 +77,7 @@ class RunConfig:
     max_samples: int = 0
     rank: int = 0
     world_size: int = 1
+    replay_i0_from: Path | None = None
 
     @property
     def effective_batch_size(self) -> int:
@@ -121,6 +122,7 @@ def load_run_config(
     max_samples: int = 0,
     rank: int = 0,
     world_size: int = 1,
+    replay_i0_from: str | Path | None = None,
 ) -> RunConfig:
     """Build a RunConfig from a model YAML + CLI overrides."""
     model = load_model_config(model_config_path)
@@ -142,4 +144,5 @@ def load_run_config(
         max_samples=max_samples,
         rank=rank,
         world_size=world_size,
+        replay_i0_from=Path(replay_i0_from) if replay_i0_from else None,
     )
