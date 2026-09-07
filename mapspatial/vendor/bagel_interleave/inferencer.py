@@ -18,6 +18,13 @@ VLM_THINK_SYSTEM_PROMPT = '''
 Let's think step by step to answer the question. For text-based thinking, enclose the process within <think> </think>, e.g. <think> thinking process here </think>. For visual thinking, enclose the content within <image_start> </image_end>, e.g. <image_start> thinking image here </image_end>. Finally conclude with the final answer wrapped in <answer></answer> tags, i.e.<answer> answer here </answer>.
 '''
 
+# C-F already forced one I0. Inviting <image_start> here makes ThinkMorph
+# close </think> and start another image instead of <answer>.
+C_F_TEXT_ANSWER_PROMPT = '''
+The visual scratchpad has already been generated. Do not output <image_start> or generate another image.
+Think in <think></think> if needed. After </think>, output the option letter in <answer></answer>, e.g. <answer>B</answer>.
+'''
+
 GEN_THINK_SYSTEM_PROMPT = '''
 Let's think step by step to answer the question. For text-based thinking, enclose the process within <think> </think>, e.g. <think> thinking process here </think>. For visual thinking, enclose the content within <image_start> </image_end>, e.g. <image_start> thinking image here </image_end>. Finally conclude with the final answer wrapped in <answer></answer> tags, i.e.<answer> answer here </answer>.
 '''
@@ -451,12 +458,19 @@ class InterleaveInferencer:
             if generate_answer:
                 if followup:
                     gen_context = self.update_context_text(followup, gen_context)
+                # Text-only closer: I0 is already in KV. VLM_THINK invites a
+                # second <image_start> (ThinkMorph follows that literally).
+                gen_context = self.update_context_text(
+                    C_F_TEXT_ANSWER_PROMPT, gen_context
+                )
                 gen_text = self.gen_text(
                     gen_context,
                     do_sample=do_sample,
                     temperature=text_temperature,
                     max_length=max_think_token_n,
                 )
+                if "<image_start>" in gen_text:
+                    gen_text = gen_text.split("<image_start>", 1)[0]
                 output_list.append(gen_text)
 
         return output_list

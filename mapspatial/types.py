@@ -143,6 +143,48 @@ class RunContext:
                 return text
         return self.draw_followup_text
 
+    def forced_interleave_followup(self, sample: TaskSample) -> str:
+        """Post-image U prompt for C-F (shared KV).
+
+        C-R understand() already sees the original question and MCQ
+        system_prompt. C-F only appends text after G, so this restates
+        both plus an extractable-letter instruction.
+        """
+        parts: list[str] = []
+        extra = str(
+            _load_g2u_config().get("forced_interleave_followup") or ""
+        ).strip()
+        parts.append(extra or self.understand_followup)
+        sys_p = str((self.gen_kw or {}).get("system_prompt") or "").strip()
+        if sys_p:
+            parts.append(sys_p)
+        q = "\n".join(
+            str(item.get("value") or "")
+            for item in sample.message
+            if item.get("type") == "text"
+        ).strip()
+        if q:
+            parts.append("Original question:\n" + q)
+        return "\n\n".join(p for p in parts if p)
+
+    @property
+    def draw_gate_prompt(self) -> str:
+        """YES/NO gate used only by autonomous C-R before G. Empty = no gate."""
+        if self.scratchpad_policy != "autonomous":
+            return ""
+        return str(
+            _load_g2u_config().get("autonomous_draw_gate_prompt") or ""
+        ).strip()
+
+    @property
+    def image_judge_prompt(self) -> str:
+        """YES/NO judge after G. Empty = skip judge and always inject I0."""
+        if self.scratchpad_policy != "autonomous":
+            return ""
+        return str(
+            _load_g2u_config().get("autonomous_image_judge_prompt") or ""
+        ).strip()
+
     def draw_instruction(self, sample: TaskSample) -> str:
         """Per-question_type draw instruction (shared by C-R and C-F)."""
         qt = sample.meta.get("question_type", "")

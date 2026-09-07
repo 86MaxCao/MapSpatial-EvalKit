@@ -62,12 +62,46 @@ def test_run_context_autonomous_scratchpad_does_not_use_typed_draw():
     )
     inst = ctx.visual_generation_instruction(sample)
     assert "blue arrow" not in inst.lower()
-    assert "you decide" in inst.lower() or "if a visual scratchpad" in inst.lower()
+    assert "edit" in inst.lower() or "image editing" in inst.lower()
+    assert "you decide" in inst.lower()
+    assert "line" in inst.lower() or "box" in inst.lower() or "circle" in inst.lower()
     follow = ctx.understand_followup.lower()
-    assert "ignore" in follow
+    assert "ignore" in follow or "optional" in follow
+    assert ctx.draw_gate_prompt
+    assert "yes or no" in ctx.draw_gate_prompt.lower()
+    assert "default to no" in ctx.draw_gate_prompt.lower()
+    assert ctx.image_judge_prompt
+    assert "last image" in ctx.image_judge_prompt.lower()
+    assert "scratchpad" in ctx.image_judge_prompt.lower()
+    assert "default to no" in ctx.image_judge_prompt.lower()
     typed = RunContext(output_dir=Path("/tmp"), scratchpad_policy="typed")
     typed_inst = typed.visual_generation_instruction(sample)
     assert "arrow" in typed_inst.lower() or "direction" in typed_inst.lower()
+
+
+def test_forced_interleave_followup_restates_question_and_asks_for_letter():
+    ctx = RunContext(
+        output_dir=Path("/tmp"),
+        gen_kw={"system_prompt": "Return only the option letter."},
+    )
+    sample = TaskSample(
+        id="x",
+        message=[
+            {"type": "image", "value": Path("/tmp/m.png")},
+            {"type": "text", "value": "Which way is north? A) up B) down"},
+        ],
+        gold="A",
+        meta={"question_type": "direction"},
+    )
+    follow = ctx.forced_interleave_followup(sample)
+    low = follow.lower()
+    assert "drawing is finished" in low or "do not generate" in low
+    assert "image_start" in low
+    assert "<answer>" in low
+    assert "return only the option letter" in low
+    assert "which way is north" in low
+    inst = ctx.visual_generation_instruction(sample)
+    assert "after the visual scratchpad has been incorporated" not in inst.lower()
 
 
 def test_task_sample_gold_isolation():

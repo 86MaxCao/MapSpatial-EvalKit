@@ -20,7 +20,7 @@ backend_args:
   cfg_scale: 4.0
   img_cfg_scale: 1.0
   num_steps: 30
-  image_size: [256, 256]
+  image_size: [512, 512]
   force_image_at: 256
 
 strategies: [direct, external_draw, forced_interleave]

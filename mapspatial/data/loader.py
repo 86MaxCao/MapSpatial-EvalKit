@@ -24,13 +24,13 @@ def iter_samples(
     tasks: list[str],
     variants: list[str],
 ) -> Iterator[tuple[FileKey, list[TaskSample]]]:
-    """Iterate over (view, task, variant) combinations, yielding (FileKey, samples).
+    """Iterate cells in task → view → variant order, yielding (FileKey, samples).
 
-    Empty files produce an empty list, not a skip — so summary.json can
-    distinguish "didn't run" from "no data".
+    FileKey stays (view, task, variant). Empty files produce an empty list,
+    not a skip — so summary.json can distinguish "didn't run" from "no data".
     """
-    for view in views:
-        for task in tasks:
+    for task in tasks:
+        for view in views:
             for variant in variants:
                 key: FileKey = (view, task, variant)
                 path = input_dir / view / task / f"{variant}.jsonl"

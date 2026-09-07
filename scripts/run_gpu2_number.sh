@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# Inference on GPU 2. Edit the config below before each run.
+# Inference on GPU 2 for the numbered-marker parallel of paper-v8.
+# Images and prompts come from bench_with_number; do not point this at
+# the original benchmark_jsonl or mix results into results/.
 set -euo pipefail
 
 # ── Edit these before each run ─────────────────────────────────────────
@@ -9,45 +11,35 @@ MODELS=(                         # model configs: yaml name (configs/models/<nam
   "latentum-base"                     # VeOmni unified
   "janus-pro-7b"                      # VeOmni unified
   "mimo-embodied-7b"                  # transformers
-  # "vilasr"                              # vilasr backend
 )
-INPUT_DIR="/home/ximeng.czq/caoziqi/code/SpatialIntelligence/SpatialIntelligence-gate2building/data/benchmark_jsonl"  # input jsonl dir
-# VIEWS="blank,sat,webrd04,wprd01"                        # comma-separated tile types, e.g. sat,wprd01
-VIEWS="wprd01"                        # comma-separated tile types, e.g. sat,wprd01
-# TASKS="t3,t1,t2"                         # comma-separated tasks, e.g. t1,t2
-TASKS="t1"                         # comma-separated tasks, e.g. t1,t2
-VARIANTS=(                       # paper-v8 layout: base + 7 transforms × direct/oracle
+DATA_ROOT="/home/ximeng.czq/caoziqi/code/SpatialIntelligence/SpatialIntelligence-gate2building/data"
+INPUT_DIR="${DATA_ROOT}/bench_with_number/jsonl"
+# Keep data-dir at gate2building/data — jsonl image paths are
+# bench_with_number/t{1,2,3,4}/..., resolved as ${DATA_ROOT}/<rel>.
+OUTPUT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/results_number"
+VIEWS="blank,sat,webrd04,wprd01"
+TASKS="t1,t2,t3,t4"
+# Numbered export is base + world only (no transform jsonl / images).
+VARIANTS=(
   "base/direct"
   "base/oracle"
-  "transform/rot90/direct"
-  "transform/rot90/oracle"
-  "transform/rot180/direct"
-  "transform/rot180/oracle"
-  "transform/rot270/direct"
-  "transform/rot270/oracle"
-  "transform/mirror_h/direct"
-  "transform/mirror_h/oracle"
-  "transform/mirror_h_rot90/direct"
-  "transform/mirror_h_rot90/oracle"
-  "transform/mirror_h_rot180/direct"
-  "transform/mirror_h_rot180/oracle"
-  "transform/mirror_h_rot270/direct"
-  "transform/mirror_h_rot270/oracle"
   "world/intervention_001/direct"
   "world/intervention_001/oracle"
   "world/sham_001/direct"
   "world/sham_001/oracle"
 )
-VARIANTS="$(IFS=,; echo "${VARIANTS[*]}")"  # join array into comma-string
+VARIANTS="$(IFS=,; echo "${VARIANTS[*]}")"
 # ────────────────────────────────────────────────────────────────────────
 
 RUN_BENCH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/run_benchmark.sh"
 for MODEL in "${MODELS[@]}"; do
-    echo "===== [gpu2] Running model: ${MODEL} ====="
+    echo "===== [gpu2-number] Running model: ${MODEL} ====="
     bash "${RUN_BENCH}" \
         "$MODEL" \
         --gpu 2 \
+        --data-dir "$DATA_ROOT" \
         --input-dir "$INPUT_DIR" \
+        --output-dir "$OUTPUT_DIR" \
         --views "$VIEWS" \
         --tasks "$TASKS" \
         --variants "$VARIANTS" \

@@ -44,6 +44,11 @@ _SHORT_SINGLE_RE = re.compile(r"^([A-Z])\.?\s*$", re.IGNORECASE)
 _SHORT_PREFIX_RE = re.compile(r"^([A-Z])[.\s]", re.IGNORECASE)
 
 _THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
+_THINK_INNER_RE = re.compile(r"<think>(.*?)</think>", re.DOTALL)
+_IMAGE_MARKER_RE = re.compile(
+    r"</?image_start>|</?image_end>|<img\b[^>]*>|</img>",
+    re.IGNORECASE,
+)
 
 # Filler words stripped before comparing a free-text answer to option texts
 # (models often answer "blue point, red point" for option "blue, red").
@@ -144,6 +149,40 @@ def _strip_think(text: str) -> str:
     return text
 
 
+def _extract_confident(
+    text: str,
+    valid_set: set[str],
+    allow_multi: bool,
+) -> ExtractResult:
+    """answer_tag / explicit / chinese only. Empty if none match."""
+
+    def _filter_letters(match_str: str) -> str:
+        letters = [c.strip().upper() for c in match_str.split(",") if c.strip()]
+        filtered = [letter for letter in letters if letter in valid_set]
+        if not filtered:
+            return ""
+        if not allow_multi:
+            return filtered[0]
+        return ",".join(sorted(set(filtered)))
+
+    m = _ANSWER_TAG_RE.search(text)
+    if m:
+        filtered = _filter_letters(m.group(1))
+        if filtered:
+            return ExtractResult(answer=filtered, method="answer_tag", confident=True)
+    m = _EXPLICIT_RE.search(text)
+    if m:
+        filtered = _filter_letters(m.group(1))
+        if filtered:
+            return ExtractResult(answer=filtered, method="explicit", confident=True)
+    m = _CHINESE_RE.search(text)
+    if m:
+        filtered = _filter_letters(m.group(1))
+        if filtered:
+            return ExtractResult(answer=filtered, method="chinese", confident=True)
+    return ExtractResult(answer="", method="no_match", confident=False)
+
+
 def _get_valid_letters(sample_meta: dict | None = None) -> str | None:
     """Extract valid option letters from sample's multiple_choice.choices."""
     if sample_meta is None:
@@ -184,44 +223,28 @@ def extract_answer(
     # Strip thinking blocks (don't extract answers from reasoning)
     clean_text = _strip_think(text)
 
-    # Determine valid letters from sample metadata
     valid_letters_str = _get_valid_letters(sample_meta)
     if valid_letters_str:
         valid_set = set(valid_letters_str)
     else:
-        # Default A-D (our data is all 4-choice, but don't hardcode silently)
         valid_set = {"A", "B", "C", "D", "E", "F"}
 
-    def _filter_letters(match_str: str) -> str:
-        """Filter matched letters to only valid ones."""
-        letters = [c.strip().upper() for c in match_str.split(",") if c.strip()]
-        filtered = [l for l in letters if l in valid_set]
-        if not filtered:
-            return ""
-        if not allow_multi:
-            return filtered[0]
-        return ",".join(sorted(set(filtered)))
+    remainder = _IMAGE_MARKER_RE.sub("", clean_text).strip()
+    if not remainder:
+        think_body = " ".join(_THINK_INNER_RE.findall(text)).strip()
+        if think_body:
+            from_think = _extract_confident(think_body, valid_set, allow_multi)
+            if from_think.answer:
+                return ExtractResult(
+                    answer=from_think.answer,
+                    method="think_explicit",
+                    confident=True,
+                )
 
-    # 1. <answer> tags
-    m = _ANSWER_TAG_RE.search(clean_text)
-    if m:
-        filtered = _filter_letters(m.group(1))
-        if filtered:
-            return ExtractResult(answer=filtered, method="answer_tag", confident=True)
-
-    # 2. Explicit answer patterns
-    m = _EXPLICIT_RE.search(clean_text)
-    if m:
-        filtered = _filter_letters(m.group(1))
-        if filtered:
-            return ExtractResult(answer=filtered, method="explicit", confident=True)
-
-    # 3. Chinese pattern
-    m = _CHINESE_RE.search(clean_text)
-    if m:
-        filtered = _filter_letters(m.group(1))
-        if filtered:
-            return ExtractResult(answer=filtered, method="chinese", confident=True)
+    # 1-3. Confident patterns (also used when only a <think> body remains)
+    tagged = _extract_confident(clean_text, valid_set, allow_multi)
+    if tagged.answer:
+        return tagged
 
     # 4. "is X" near end
     m = _IS_RE.search(clean_text)

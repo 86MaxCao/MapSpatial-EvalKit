@@ -6,6 +6,7 @@ Never writes, truncates, or otherwise mutates any JSONL / summary.json.
 Usage (mapspatial env):
   python scripts/summarize_results.py
   python scripts/summarize_results.py --results-dir results --draw-dir results_draw --out docs/report0826.md
+  python scripts/summarize_results.py --out docs/report0902.md --free-draw-dir results_free_draw
 """
 
 from __future__ import annotations
@@ -21,7 +22,7 @@ from typing import Any, Iterable, Iterator
 
 
 SKIP_DIR_MARKERS = (".broken", ".old_empty", ".backup", ".old", ".old_partial")
-SKIP_TOP_DIRS = {"logs", "docs"}
+SKIP_TOP_DIRS = {"logs", "docs", "backup"}
 REPO_ROOT = Path(__file__).resolve().parents[1]
 RANK_RE = re.compile(r"^(?P<stem>.+)\.rank(?P<rank>\d+)-of-(?P<world>\d+)$")
 

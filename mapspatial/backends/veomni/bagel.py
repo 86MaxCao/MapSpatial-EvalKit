@@ -287,7 +287,11 @@ class BagelBackend(Backend):
         return "\n".join(x for x in output if isinstance(x, str))
 
     def draw(self, context: Message, instruction: str, **kw) -> "Image.Image":
-        """Image-first G: encode prompt + instruction, generate one image, drop KV."""
+        """Image-first G. ``edit=True`` uses official Bagel edit CFG (I2I).
+
+        Default ``edit=False`` keeps the previous generate CFG so typed C-R
+        is unchanged. Autonomous C-R passes edit=True.
+        """
         import torch
         from PIL import Image
 
@@ -296,18 +300,29 @@ class BagelBackend(Backend):
         if instruction:
             input_list.append(instruction)
 
+        use_edit = bool(kw.pop("edit", False))
+        if use_edit:
+            # Official Bagel edit/think_edit (not generate/T2I).
+            cfg_interval = (0.0, 1.0)
+            cfg_renorm_type = "text_channel"
+            cfg_img_scale = max(float(self._cfg_img_scale), 2.0)
+        else:
+            cfg_interval = self._cfg_interval
+            cfg_renorm_type = self._cfg_renorm_type
+            cfg_img_scale = self._cfg_img_scale
+
         output = inferencer.image_first_inference(
             input_lists=input_list,
             generate_answer=False,
             do_sample=False,
             text_temperature=self._temperature,
             cfg_text_scale=self._cfg_text_scale,
-            cfg_img_scale=self._cfg_img_scale,
-            cfg_interval=self._cfg_interval,
+            cfg_img_scale=cfg_img_scale,
+            cfg_interval=cfg_interval,
             timestep_shift=self._timestep_shift,
             num_timesteps=self._num_timesteps,
             cfg_renorm_min=self._cfg_renorm_min,
-            cfg_renorm_type=self._cfg_renorm_type,
+            cfg_renorm_type=cfg_renorm_type,
             image_shapes=self._image_shapes,
             noise_seed=kw.get("seed"),
             max_images=1,

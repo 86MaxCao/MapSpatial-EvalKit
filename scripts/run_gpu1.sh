@@ -13,9 +13,11 @@ MODELS=(                         # model configs: yaml name (configs/models/<nam
   # "spatial-mllm"                   # spatial_mllm backend
 )
 INPUT_DIR="/home/ximeng.czq/caoziqi/code/SpatialIntelligence/SpatialIntelligence-gate2building/data/benchmark_jsonl"  # input jsonl dir
-VIEWS="blank,sat,webrd04,wprd01"               # comma-separated tile types, e.g. sat,wprd01
-TASKS="t3,t1,t2"                    # comma-separated tasks, e.g. t1,t2
-VARIANTS=(                       # paper-v8 layout: base + 7 transforms × direct/oracle
+# VIEWS="blank,sat,webrd04,wprd01"         # comma-separated tile types, e.g. sat,wprd01
+VIEWS="wprd01"                        # comma-separated tile types, e.g. sat,wprd01
+# TASKS="t4,t3,t1,t2"                    # comma-separated tasks, e.g. t1,t2
+TASKS="t1"                               # comma-separated tasks, e.g. t1,t2
+VARIANTS=(                               # paper-v8 layout: base + 7 transforms × direct/oracle
   "base/direct"
   "base/oracle"
   "transform/rot90/direct"

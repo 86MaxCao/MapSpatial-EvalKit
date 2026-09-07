@@ -98,7 +98,7 @@ def iter_samples(
     input_dir: Path, data_root: Path,
     views: list[str], tasks: list[str], variants: list[str],
 ) -> Iterator[tuple[FileKey, list[TaskSample]]]:
-    """按 (view, task, variant) 分组产出。空文件产出空 list 而非跳过。"""
+    """按 (task, view, variant) 顺序、按 (view, task, variant) 分组产出。空文件产出空 list 而非跳过。"""
 ```
 
 **为什么按文件分组而不是打平**：结果按 `{view}/{task}/{variant}.jsonl` 分文件写，续跑也按文件粒度判断。打平后要额外维护「这条属于哪个输出文件」的映射，没必要。

@@ -1,23 +1,17 @@
 #!/usr/bin/env bash
-# Forced interleave (C-F, image-first G2U, shared KV). One model per GPU.
-# Same protocol as typed/autonomous C-R: wprd01 t1-t4 base/direct.
-# Writes I0 (must generate; no --replay-i0-from). Resume-by-id.
-#
-# Default is bagel on GPU 3. Override for a 4-way split:
-#   GPU=0 MODELS_CSV=thinkmorph-7b:forced_interleave bash scripts/run_gpu3_draw.sh
-#   GPU=1 MODELS_CSV=latentum-base:forced_interleave bash scripts/run_gpu3_draw.sh
-#   GPU=2 MODELS_CSV=sensenova-u1-8b:forced_interleave bash scripts/run_gpu3_draw.sh
+# GPU 1 — autonomous G2U C-R (model chooses what to draw; U may ignore).
+# Does not replay typed I0. Writes a new G image per sample.
+# Default protocol matches previous C-R comparison: wprd01 t1-t4 base/direct.
 set -euo pipefail
 
-GPU="${GPU:-3}"
-MODELS_CSV="${MODELS_CSV:-bagel-7b:forced_interleave}"
+GPU="${GPU:-1}"
+MODELS_CSV="${MODELS_CSV:-bagel-7b:external_draw,thinkmorph-7b:external_draw,latentum-base:external_draw,sensenova-u1-8b:external_draw}"
 VIEWS="${VIEWS:-wprd01}"
 TASKS="${TASKS:-t1,t2,t3,t4}"
 VARIANTS="${VARIANTS:-base/direct}"
 
-PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/.."
-PROJECT_DIR="$(cd "${PROJECT_DIR}" && pwd)"
-OUTPUT_DIR="${OUTPUT_DIR:-${PROJECT_DIR}/results_forced_interleave}"
+PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+OUTPUT_DIR="${OUTPUT_DIR:-${PROJECT_DIR}/results_free_draw}"
 DATA_ROOT="${DATA_ROOT:-${PROJECT_DIR}/../SpatialIntelligence-gate2building/data}"
 INPUT_DIR="${INPUT_DIR:-${DATA_ROOT}/benchmark_jsonl}"
 RUN_BENCH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/run_benchmark.sh"
@@ -29,7 +23,7 @@ IFS=',' read -r -a ENTRIES <<< "${MODELS_CSV}"
 for ENTRY in "${ENTRIES[@]}"; do
     MODEL="${ENTRY%%:*}"
     STRATEGY="${ENTRY##*:}"
-    echo "===== [gpu${GPU}] ${MODEL} | ${STRATEGY} | views=${VIEWS} tasks=${TASKS} ====="
+    echo "===== [gpu${GPU}] ${MODEL} | ${STRATEGY} autonomous | views=${VIEWS} tasks=${TASKS} ====="
     env -u MODEL bash "${RUN_BENCH}" "$MODEL" \
         --gpu "${GPU}" \
         --strategy "$STRATEGY" \
@@ -39,5 +33,6 @@ for ENTRY in "${ENTRIES[@]}"; do
         --views "$VIEWS" \
         --tasks "$TASKS" \
         --variants "$VARIANTS" \
+        --g2u-scratchpad autonomous \
         --skip-preflight
 done

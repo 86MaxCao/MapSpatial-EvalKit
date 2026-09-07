@@ -2,8 +2,8 @@
 # image-first, single generated image. Do not use this file for direct / native.
 #
 # scratchpad_policy:
-#   typed        — per-question_type draw_instruction (default; previous C-R).
-#   autonomous   — generic G prompt; U may ignore the scratchpad.
+#   typed        — always draw; per-question_type draw_instruction (default).
+#   autonomous   — agent steps: gate (draw?) → optional G → judge (usable?) → U.
 # Override per run with --g2u-scratchpad without editing this file.
 
 protocol: image_first_single_image
@@ -13,30 +13,59 @@ seed: 42
 save_generated: true
 scratchpad_policy: typed
 
+autonomous_draw_gate_prompt: >
+  Do not answer the original question yet. Reply with only YES or NO.
+  Do not reply with an option letter.
+  Default to NO. Reply YES only if the input image(s) are not enough
+  to answer confidently and you need to mark something on them first.
+  NO = skip drawing and answer from the input image(s) next.
+
 autonomous_generation_prompt: >
-  If a visual scratchpad would help you reason about the spatial question,
-  generate exactly one answer-agnostic sketch (no option letter, no final
-  answer, no explanatory text in the image). You decide what to mark.
-  If the original map image(s) are already sufficient, produce only a
-  minimal non-answer sketch rather than inventing a solution diagram.
+  This is image editing, not text-to-image. Edit the input image(s) in
+  place: keep the original content and overlay a few auxiliary lines,
+  points, circles, or boxes. You decide what to mark. Do not generate
+  a new picture, a blank canvas, or redraw the whole image. No option
+  letter, no final answer, no explanatory text in the image.
+
+autonomous_image_judge_prompt: >
+  Do not answer the original question. Reply with only YES or NO.
+  Do not reply with an option letter. A/B/C/D is not a valid reply.
+  Earlier image(s) are the ORIGINAL input. The LAST image is GENERATED.
+  Compare them. Is the LAST image a qualified visual scratchpad of the
+  ORIGINAL? Default to NO.
+  YES only if the last image is an in-place edit of the original (same
+  scene, not a new picture) AND it overlays a few new auxiliary marks
+  (lines, points, circles, or boxes) that would help you.
+  Reply NO if it is a new picture, a full redraw, blank, unrelated, has
+  no useful new marks, or you are unsure.
 
 autonomous_understand_followup: >
-  The last image may be a generated visual scratchpad. It is not an
-  original map and not an answer option. Use it only if it is faithful
-  to the original map(s) and actually helps. If it conflicts with the
-  original map(s) or does not help, ignore it and answer from the
-  original map image(s) alone.
+  The last image may be a visual scratchpad. It is not an original
+  input and not an answer option. Treat it as optional evidence.
+  If it conflicts with the input image(s) or does not help, ignore it
+  and answer from the input image(s) alone.
 
 generation_system_prompt: >
   Generate exactly one answer-agnostic visual scratchpad that helps solve
   the spatial question. Do not write the final answer, an option letter,
-  or explanatory text into the image. After the visual scratchpad has been
-  incorporated, answer the original question.
+  or explanatory text into the image.
 
 understand_followup: >
   The last image is a generated visual scratchpad, not an original map
   and not an answer option. Use it together with the original map
   image(s) to answer the original question.
+
+# C-F only: appended after I0 on the same KV. Must override the drawing
+# turn and elicit an extractable MCQ letter. C-R U already has the original
+# question + MCQ system_prompt, so it does not use this block.
+forced_interleave_followup: >
+  Drawing is finished. Do not generate or describe another image.
+  Do not output <image_start>, <img>, or any image marker.
+  The last generated image is a visual scratchpad, not an original map
+  and not an answer option. Use it together with the original map
+  image(s) to answer the original question.
+  After </think>, output the option letter in <answer></answer>,
+  e.g. <answer>B</answer>. Do not stop inside <think>.
 
 draw_instruction:
   direction: "Draw one blue arrow that represents the queried direction between the named points. Do not add text or answer choices."

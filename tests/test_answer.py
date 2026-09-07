@@ -78,6 +78,26 @@ def test_no_match():
     assert result.method == "no_match"
 
 
+def test_think_only_explicit_after_image_start():
+    """ThinkMorph C-F: letter is inside </think> then <image_start>."""
+    text = (
+        "<think>From the green point clockwise the order is red, yellow. "
+        "Therefore, the correct answer is: B.</think><image_start>"
+    )
+    result = extract_answer(text)
+    assert result.answer == "B"
+    assert result.confident
+    assert result.method == "think_explicit"
+
+
+def test_think_only_without_explicit_stays_empty():
+    """Do not last-letter harvest from a think-only leftover."""
+    text = "<think>Maybe A or C. Not sure about D.</think><image_start>"
+    result = extract_answer(text)
+    assert result.answer == ""
+    assert result.method == "no_match"
+
+
 def test_with_sample_meta():
     """Test using multiple_choice from sample metadata for valid letters."""
     meta = {

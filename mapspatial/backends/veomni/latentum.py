@@ -653,6 +653,10 @@ class LatentUMBackend(Backend):
         kw.pop("image_first", None)
         kw.pop("followup", None)
         kw.pop("max_rounds", None)
+        # yaml generate.max_new_tokens is 128 (U-direct). After I0 the model
+        # often restates the draw instruction and never reaches <answer>.
+        if int(kw.get("max_new_tokens") or 0) < 512:
+            kw["max_new_tokens"] = 512
         return self.interleave(
             message,
             instruction=instruction,

@@ -4,6 +4,7 @@ set -euo pipefail
 
 # ── Edit these before each run ─────────────────────────────────────────
 MODELS=(                           # model configs: yaml name (configs/models/<name>.yaml) or full path
+  # already filled 34200 7-type; runner loads weights before resume-skip
   "sensenova-u1-8b"                # VeOmni unified
   "blip3o-8b"                      # VeOmni unified
   "show-o2-7b"                     # VeOmni unified
@@ -12,12 +13,15 @@ MODELS=(                           # model configs: yaml name (configs/models/<n
   "spatial-mllm"                   # spatial_mllm backend
   "sensenova-si-1.3-qwen3-vl-8b"   # sensenova_si backend
   "sensenova-si-1.5-internvl3-8b"  # sensenova_si backend
-  # "internvl3-8b"                   # vLLM
-  # "internvl3-5-8b"                 # vLLM
+  "internvl3-8b"                     # vLLM
+  "internvl3-5-8b"                   # vLLM
+  # "vilasr"                           # vilasr backend
 )
 INPUT_DIR="/home/ximeng.czq/caoziqi/code/SpatialIntelligence/SpatialIntelligence-gate2building/data/benchmark_jsonl"  # input jsonl dir
-VIEWS="blank,sat,webrd04,wprd01"                        # comma-separated tile types, e.g. sat,wprd01
-TASKS="t3,t1,t2"                         # comma-separated tasks, e.g. t1,t2
+# VIEWS="blank,sat,webrd04,wprd01"                        # comma-separated tile types, e.g. sat,wprd01
+VIEWS="wprd01"                        # comma-separated tile types, e.g. sat,wprd01
+# TASKS="t3,t1,t2"                         # comma-separated tasks, e.g. t1,t2
+TASKS="t1"                         # comma-separated tasks, e.g. t1,t2
 VARIANTS=(                       # paper-v8 layout: base + 7 transforms × direct/oracle
   "base/direct"
   "base/oracle"

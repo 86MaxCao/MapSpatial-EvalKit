@@ -273,8 +273,8 @@ def main():
         choices=["typed", "autonomous"],
         default="typed",
         help="G2U scratchpad policy (external_draw / forced_interleave only). "
-             "typed=per-question_type draw instructions (default). "
-             "autonomous=generic G prompt; U may ignore the scratchpad.",
+             "typed=always draw with per-question_type instructions (default). "
+             "autonomous=gate (draw?) then optional G then judge (usable?).",
     )
     p_run.set_defaults(func=cmd_run)
 

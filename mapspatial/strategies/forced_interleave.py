@@ -26,9 +26,9 @@ class ForcedInterleaveStrategy(Strategy):
         ctx: RunContext,
     ) -> list[Prediction]:
         results = []
-        followup = ctx.understand_followup
         for s in samples:
             instruction = ctx.visual_generation_instruction(s)
+            followup = ctx.forced_interleave_followup(s)
             try:
                 pred = backend.forced_interleave(
                     s.message,

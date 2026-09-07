@@ -15,7 +15,9 @@ backend_args:
   cfg_scale: 4.0
   img_cfg_scale: 1.0
   num_steps: 30
-  image_size: [256, 256]
+  # 256x256 I2I collapses map tiles to texture blobs. 512 matches the
+  # documented U1 draw fix (docs/todo-v0.md) and C-F needs a readable I0.
+  image_size: [512, 512]
   # forced_interleave: inject <img> after N reasoning tokens (think_mode on)
   # — U1 does not emit <img> under VQA-style prompts (0% native draw rate)
   force_image_at: 256
