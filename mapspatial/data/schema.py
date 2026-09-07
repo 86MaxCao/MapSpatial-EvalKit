@@ -16,6 +16,83 @@ from ..types import TaskSample, Message
 from ..messages import strip_placeholders
 
 
+def task_from_record(record: dict) -> str:
+    """Normalize ``task_id`` (``T1`` / ``t1``) to the cell task key ``t1``."""
+    raw = str(record.get("task_id") or "").strip()
+    if raw.lower().startswith("t") and len(raw) >= 2:
+        return raw.lower()
+    return raw.lower()
+
+
+def evidence_condition_from_record(record: dict) -> str:
+    """direct / oracle / ... from HF ``condition`` or the tree fields."""
+    return (
+        record.get("evidence_condition")
+        or record.get("mode")
+        or record.get("condition")
+        or _infer_evidence_condition(record)
+    )
+
+
+def cell_variant_from_record(record: dict) -> str:
+    """Map a record onto the tree cell path, e.g. ``transform/rot90/direct``."""
+    layer = str(record.get("layer") or "base").strip() or "base"
+    name = record.get("variant")
+    if name is None or str(name).strip() == "":
+        name = "base"
+    else:
+        name = str(name).strip()
+    condition = evidence_condition_from_record(record)
+    if layer == "base":
+        return f"base/{condition}"
+    if layer == "transform":
+        return f"transform/{name}/{condition}"
+    if layer == "world":
+        return f"world/{name}/{condition}"
+    if name in {"", "base"}:
+        return f"{layer}/{condition}"
+    return f"{layer}/{name}/{condition}"
+
+
+def _stem_question(question: str) -> str:
+    """Drop trailing inline ``A. ...`` / ``Options:`` lines from the stem."""
+    lines = question.rstrip().splitlines()
+    while lines:
+        s = lines[-1].strip()
+        if not s:
+            lines.pop()
+            continue
+        if s.lower() == "options:" or re.match(r"^[A-Z][.)]\s+\S", s):
+            lines.pop()
+            continue
+        break
+    return "\n".join(lines).rstrip()
+
+
+def _question_text(record: dict) -> str:
+    """Prompt shown to the model.
+
+    Tree records already embed shuffled options in ``question_with_options``.
+    HF records have a bare ``question`` plus a shuffled ``options`` list — and
+    T2 sometimes also inlines *unshuffled* A/B lines in ``question``. Always
+    rebuild from ``options`` when ``question_with_options`` is absent so gold
+    letters stay consistent.
+    """
+    embedded = record.get("question_with_options")
+    if embedded:
+        return strip_placeholders(str(embedded))
+    stem = _stem_question(strip_placeholders(str(record.get("question") or "")))
+    options = record.get("options") or []
+    if options:
+        return stem + "\n\nOptions:\n" + "\n".join(str(o) for o in options)
+    return stem
+
+
+def _nested_meta(record: dict) -> dict:
+    raw = record.get("meta")
+    return raw if isinstance(raw, dict) else {}
+
+
 def _gold_from_record(record: dict) -> tuple[str, str]:
     """(gold, gold_text) — normalize gold to an option letter when possible."""
     answer = record.get("answer", "")
@@ -42,12 +119,10 @@ def parse_record(record: dict, data_root: Path) -> TaskSample:
     gold is isolated in TaskSample.gold, never in Message.
     """
     sample_id = record.get("id", "")
-    # question_with_options embeds the option list; bare question hides options
-    question = record.get("question_with_options") or record.get("question", "")
-    # strip any placeholders that might sneak in from the question field
-    question = strip_placeholders(question)
+    question = _question_text(record)
 
-    # Resolve image paths to absolute
+    # Resolve image paths to absolute (tree: benchmark_images_t*/...;
+    # HF pack: images/t1/... relative to the repo root).
     image_rels = record.get("images", [])
     image_abs = [(data_root / rel).resolve() for rel in image_rels]
 
@@ -57,39 +132,49 @@ def parse_record(record: dict, data_root: Path) -> TaskSample:
     question_type = record.get("question_type", "")
     multiple_choice = record.get("multiple_choice")
     options = record.get("options", [])
+    nested = _nested_meta(record)
 
     # Transform-layer records carry the transform name in `variant`
-    # (e.g. "mirror_h_rot90"); base records have variant=="base". The runner
-    # materializes transformed images from this tag (see media.materialize_transforms).
-    variant_name = record.get("variant", "")
-    layer = record.get("layer", "")
-    transform = variant_name if (layer == "transform" and variant_name and variant_name != "base") else None
+    # (e.g. "mirror_h_rot90"); base records have variant=="base" or null.
+    # HF transform rows still point at the *base* PNG — apply at load time
+    # (see media.materialize_transforms). World rows already have their own PNG.
+    variant_name = record.get("variant") or ""
+    if variant_name == "":
+        variant_name = "base"
+    layer = record.get("layer") or ""
+    transform = (
+        variant_name
+        if (layer == "transform" and variant_name and variant_name != "base")
+        else None
+    )
 
     message = _build_message(
         question, image_abs, task_id, question_type, multiple_choice, options, transform
     )
 
     gold, gold_text = _gold_from_record(record)
+    condition = evidence_condition_from_record(record)
+    oracle = record.get("oracle")
+    if oracle is None:
+        oracle = condition == "oracle"
 
     meta = {
-        "view": record.get("view", "") or record.get("tile_type", ""),
-        "variant": record.get("variant", ""),
+        "view": record.get("view", "") or record.get("tile_type", "") or nested.get("tile_type", ""),
+        "variant": variant_name,
         "task_id": task_id,
         "question_type": question_type,
-        "oracle": record.get("oracle", False),
-        "evidence_condition": (
-            record.get("evidence_condition")
-            or record.get("mode")
-            or _infer_evidence_condition(record)
-        ),
+        "oracle": bool(oracle),
+        "evidence_condition": condition,
         "track": record.get("track", ""),
         "images": image_rels,
-        "sample_id": record.get("sample_id", ""),
-        "case_id": record.get("case_id", ""),
-        "scheme": record.get("scheme", ""),
+        "sample_id": record.get("sample_id", "") or nested.get("instance_id", ""),
+        "case_id": record.get("case_id", "") or nested.get("case_id", ""),
+        "scheme": record.get("scheme", "") or nested.get("scheme", ""),
+        "instance_id": record.get("instance_id", "") or nested.get("instance_id", ""),
         "multiple_choice": multiple_choice,
         "system_prompt": record.get("system_prompt", ""),
         "gold_text": gold_text,
+        "layer": layer,
     }
 
     return TaskSample(id=sample_id, message=message, gold=gold, meta=meta)

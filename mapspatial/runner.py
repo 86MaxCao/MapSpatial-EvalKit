@@ -207,7 +207,9 @@ def run(
 
     # Preflight
     if not cfg.skip_preflight:
-        report = preflight(cfg.input_dir, cfg.data_dir, views, tasks, variants)
+        report = preflight(
+            cfg.input_dir, cfg.data_dir, views, tasks, variants, layout=cfg.layout,
+        )
         if report.missing > 0 or report.unreadable > 0:
             if report.missing > cfg.allow_missing:
                 print(f"Preflight FAILED: {report.missing} missing, "
@@ -262,7 +264,7 @@ def run(
     cells: list[Cell] = []
 
     for (view, task, variant), samples in iter_samples(
-        cfg.input_dir, cfg.data_dir, views, tasks, variants
+        cfg.input_dir, cfg.data_dir, views, tasks, variants, layout=cfg.layout,
     ):
         # Update context
         ctx.view = view

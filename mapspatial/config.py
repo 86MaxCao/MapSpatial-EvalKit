@@ -57,6 +57,30 @@ class BackendConfig:
         return 32 if self.backend == "vllm" else 1
 
 
+LAYOUTS = ("tree", "hf")
+
+
+def resolve_data_paths(
+    layout: str,
+    input_dir: str | Path,
+    data_dir: str | Path | None,
+) -> tuple[Path, Path]:
+    """Resolve ``(input_dir, data_dir)`` for ``--layout tree|hf``.
+
+    tree: jsonl tree + separate image root (``data_dir`` required).
+    hf: ``input_dir`` is the downloaded HuggingFace repo root (``data/`` +
+    ``images/``); ``data_dir`` defaults to that same root.
+    """
+    if layout not in LAYOUTS:
+        raise ValueError(f"Unknown layout {layout!r}; expected one of {LAYOUTS}")
+    input_path = Path(input_dir)
+    if layout == "hf":
+        return input_path, Path(data_dir) if data_dir else input_path
+    if not data_dir:
+        raise ValueError("--data-dir is required when --layout tree")
+    return input_path, Path(data_dir)
+
+
 @dataclass
 class RunConfig:
     """Top-level run configuration."""
@@ -67,6 +91,7 @@ class RunConfig:
     views: list[str] = field(default_factory=lambda: ["sat", "webrd04", "blank"])
     tasks: list[str] = field(default_factory=lambda: ["t1", "t2", "t3", "t4"])
     variants: list[str] = field(default_factory=lambda: ["direct", "oracle"])
+    layout: str = "tree"
     strategy: str = "direct"
     batch_size: int = 0
     skip_preflight: bool = False
@@ -107,7 +132,7 @@ def load_model_config(path: str | Path) -> BackendConfig:
 def load_run_config(
     model_config_path: str | Path,
     *,
-    data_dir: str | Path,
+    data_dir: str | Path | None = None,
     input_dir: str | Path,
     output_dir: str | Path,
     strategy: str = "direct",
@@ -125,18 +150,22 @@ def load_run_config(
     world_size: int = 1,
     replay_i0_from: str | Path | None = None,
     g2u_scratchpad: str = "typed",
+    layout: str = "tree",
 ) -> RunConfig:
     """Build a RunConfig from a model YAML + CLI overrides."""
     model = load_model_config(model_config_path)
+    layout = layout or "tree"
+    input_path, data_path = resolve_data_paths(layout, input_dir, data_dir)
     return RunConfig(
         model=model,
-        data_dir=Path(data_dir),
-        input_dir=Path(input_dir),
+        data_dir=data_path,
+        input_dir=input_path,
         output_dir=Path(output_dir),
         strategy=strategy,
         views=views or ["sat", "webrd04", "blank"],
         tasks=tasks or ["t1", "t2", "t3", "t4"],
         variants=variants or ["direct", "oracle"],
+        layout=layout,
         batch_size=batch_size,
         skip_preflight=skip_preflight,
         allow_missing=allow_missing,

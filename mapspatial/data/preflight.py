@@ -42,6 +42,7 @@ def preflight(
     views: list[str],
     tasks: list[str],
     variants: list[str],
+    layout: str = "tree",
 ) -> PreflightReport:
     """Verify all images exist and are readable.
 
@@ -50,7 +51,7 @@ def preflight(
     report = PreflightReport()
 
     for (view, task, variant), samples in iter_samples(
-        input_dir, data_root, views, tasks, variants
+        input_dir, data_root, views, tasks, variants, layout=layout,
     ):
         for sample in samples:
             for item in sample.message:

@@ -51,6 +51,7 @@ while [[ $# -gt 0 ]]; do
         --variants)   VARIANTS="$2"; shift 2 ;;
         --replay-i0-from) EXTRA+=("$1" "$2"); shift 2 ;;
         --g2u-scratchpad) EXTRA+=("$1" "$2"); shift 2 ;;
+        --layout)     EXTRA+=("$1" "$2"); shift 2 ;;
         -*)           EXTRA+=("$1"); shift ;;
         *)
             if [[ -z "$MODEL" ]]; then

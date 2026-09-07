@@ -29,42 +29,53 @@ def cmd_run(args: argparse.Namespace) -> None:
 
     rank, world_size = _get_rank_world_size()
 
-    cfg = load_run_config(
-        args.model,
-        data_dir=args.data_dir,
-        input_dir=args.input_dir,
-        output_dir=args.output_dir,
-        strategy=args.strategy,
-        views=args.views.split(",") if args.views else None,
-        tasks=args.tasks.split(",") if args.tasks else None,
-        variants=args.variants.split(",") if args.variants else None,
-        batch_size=args.batch_size,
-        skip_preflight=args.skip_preflight,
-        allow_missing=args.allow_missing,
-        store_question=args.store_question,
-        no_save_generated=args.no_save_generated,
-        no_system_prompt=args.no_system_prompt,
-        max_samples=args.max_samples,
-        rank=rank,
-        world_size=world_size,
-        replay_i0_from=args.replay_i0_from,
-        g2u_scratchpad=args.g2u_scratchpad,
-    )
+    try:
+        cfg = load_run_config(
+            args.model,
+            data_dir=args.data_dir,
+            input_dir=args.input_dir,
+            output_dir=args.output_dir,
+            strategy=args.strategy,
+            views=args.views.split(",") if args.views else None,
+            tasks=args.tasks.split(",") if args.tasks else None,
+            variants=args.variants.split(",") if args.variants else None,
+            layout=args.layout,
+            batch_size=args.batch_size,
+            skip_preflight=args.skip_preflight,
+            allow_missing=args.allow_missing,
+            store_question=args.store_question,
+            no_save_generated=args.no_save_generated,
+            no_system_prompt=args.no_system_prompt,
+            max_samples=args.max_samples,
+            rank=rank,
+            world_size=world_size,
+            replay_i0_from=args.replay_i0_from,
+            g2u_scratchpad=args.g2u_scratchpad,
+        )
+    except ValueError as e:
+        raise SystemExit(str(e)) from e
 
     run(cfg)
 
 
 def cmd_preflight(args: argparse.Namespace) -> None:
+    from .config import resolve_data_paths
     from .data.preflight import preflight, save_preflight
 
     views = args.views.split(",") if args.views else ["sat", "webrd04", "blank"]
     tasks = args.tasks.split(",") if args.tasks else ["t1", "t2", "t3", "t4"]
     variants = args.variants.split(",") if args.variants else ["direct", "oracle"]
+    layout = getattr(args, "layout", "tree") or "tree"
+    try:
+        input_dir, data_dir = resolve_data_paths(layout, args.input_dir, args.data_dir)
+    except ValueError as e:
+        raise SystemExit(str(e)) from e
 
     report = preflight(
-        Path(args.input_dir),
-        Path(args.data_dir),
+        input_dir,
+        data_dir,
         views, tasks, variants,
+        layout=layout,
     )
 
     if args.output:
@@ -239,9 +250,17 @@ def main():
     p_run = sub.add_parser("run", help="Run inference")
     p_run.add_argument("--model", required=True, help="Path to model YAML config")
     p_run.add_argument("--strategy", default="direct", help="Strategy name")
-    p_run.add_argument("--input-dir", required=True, help="Path to data-jsonl/ directory")
-    p_run.add_argument("--data-dir", required=True, help="Path to data/ directory (images root)")
+    p_run.add_argument("--input-dir", required=True, help="JSONL tree (tree) or HF repo root (hf)")
+    p_run.add_argument(
+        "--data-dir", default=None,
+        help="Image root. Required for --layout tree; defaults to --input-dir for --layout hf",
+    )
     p_run.add_argument("--output-dir", required=True, help="Output directory for results")
+    p_run.add_argument(
+        "--layout", choices=["tree", "hf"], default="tree",
+        help="Dataset layout: tree={view}/{task}/{variant}.jsonl (default); "
+             "hf=HuggingFace pack with data/*.jsonl + images/",
+    )
     p_run.add_argument("--views", default=None, help="Comma-separated views (e.g. sat,webrd04)")
     p_run.add_argument("--tasks", default=None, help="Comma-separated tasks (e.g. t1,t2)")
     p_run.add_argument(
@@ -280,8 +299,15 @@ def main():
 
     # preflight
     p_pf = sub.add_parser("preflight", help="Check image availability")
-    p_pf.add_argument("--input-dir", required=True, help="Path to data-jsonl/ directory")
-    p_pf.add_argument("--data-dir", required=True, help="Path to data/ directory")
+    p_pf.add_argument("--input-dir", required=True, help="JSONL tree (tree) or HF repo root (hf)")
+    p_pf.add_argument(
+        "--data-dir", default=None,
+        help="Image root. Required for --layout tree; defaults to --input-dir for --layout hf",
+    )
+    p_pf.add_argument(
+        "--layout", choices=["tree", "hf"], default="tree",
+        help="Dataset layout: tree (default) or hf (HuggingFace pack)",
+    )
     p_pf.add_argument("--views", default=None)
     p_pf.add_argument("--tasks", default=None)
     p_pf.add_argument(
