@@ -61,12 +61,11 @@ class ShowO2Backend(Backend):
         # Show-o2 checkpoint has no tokenizer files; load from Qwen2.5-VL-7B-Instruct
         tok_path = model_path
         if not os.path.exists(os.path.join(tok_path, "tokenizer_config.json")):
-            qwen_path = os.path.join(
-                os.environ.get("CKPT_DIR", "/mnt/nas-tbt/tbt/checkpoint/hf_cache"),
-                "Qwen2.5-VL-7B-Instruct",
-            )
-            if os.path.exists(qwen_path):
-                tok_path = qwen_path
+            ckpt_dir = os.environ.get("CKPT_DIR")
+            if ckpt_dir:
+                qwen_path = os.path.join(ckpt_dir, "Qwen2.5-VL-7B-Instruct")
+                if os.path.exists(qwen_path):
+                    tok_path = qwen_path
         self._tokenizer = load_tokenizer(tok_path)
 
         # Add special tokens (VeOmni convention)
@@ -86,11 +85,13 @@ class ShowO2Backend(Backend):
         # Load WanVAE for image encoding
         import torch as _torch
         from ...vendor.showo2.models.wan21_vae import WanVAE
-        vae_pth = os.path.join(
-            os.environ.get("CKPT_DIR", "/mnt/nas-tbt/tbt/checkpoint/hf_cache"),
-            "JoyAI-Image-Edit", "vae", "Wan2.1_VAE.pth",
-        )
-        if not os.path.exists(vae_pth):
+        vae_pth = None
+        ckpt_dir = os.environ.get("CKPT_DIR")
+        if ckpt_dir:
+            candidate = os.path.join(ckpt_dir, "JoyAI-Image-Edit", "vae", "Wan2.1_VAE.pth")
+            if os.path.exists(candidate):
+                vae_pth = candidate
+        if vae_pth is None:
             # Fallback: check model's own directory
             vae_pth = os.path.join(model_path, "vae", "Wan2.1_VAE.pth")
         if os.path.exists(vae_pth):
@@ -296,7 +297,11 @@ class ShowO2Backend(Backend):
     def draw(self, context: Message, instruction: str, **kw) -> "Image.Image":
         """Generate an image via ODE sampling + VAE decode.
 
-        Aligned with official inference_t2i.py:
+        With context images → I2I path (_draw_i2i), aligned with official
+        inference_mixed_modality.py: context latents are prepended to the
+        noise tensor and kept fixed via only_denoise_last_image=True.
+
+        Without context images → T2I path, aligned with official inference_t2i.py:
         1. create_transport (Linear/velocity) + Sampler
         2. prepare_gen_input → text tokens + modality positions
         3. Sample noise z, duplicate for CFG if guidance_scale > 0
@@ -337,17 +342,23 @@ class ShowO2Backend(Backend):
         context_images = [item for item in input_list if not isinstance(item, str)]
         context_text = "\n".join(text_parts)
         prompt = f"{context_text}\n{instruction}" if context_text else instruction
-        prompts = [prompt]
-
-        # NOTE: Show-o2's t2i_generate does not natively support image
-        # conditioning. Context images are extracted here for future I2I
-        # support, but current generation is text-conditioned only.
 
         # Generation parameters
         guidance_scale = kw.get("guidance_scale", self._guidance_scale)
         num_steps = kw.get("num_steps", self._num_steps)
         time_shifting_factor = kw.get("time_shifting_factor", self._time_shifting_factor)
         model_dtype = next(inner.parameters()).dtype
+
+        if context_images and self._vae is not None:
+            return self._draw_i2i(
+                prompt,
+                context_images,
+                guidance_scale=guidance_scale,
+                num_steps=num_steps,
+                time_shifting_factor=time_shifting_factor,
+            )
+
+        prompts = [prompt]
 
         with torch.no_grad():
             # 1. Transport + sampler
@@ -431,6 +442,185 @@ class ShowO2Backend(Backend):
             images = images.squeeze(2)  # (B, 3, H, W)
 
             # 9. Convert to PIL
+            images = torch.clamp((images + 1.0) / 2.0, 0.0, 1.0)
+            arr = (images[0] * 255.0).to(torch.uint8).permute(1, 2, 0).cpu().numpy()
+            return Image.fromarray(arr)
+
+    # ------------------------------------------------------------------
+    # I2I: image-conditioned generation (official mixed-modality path)
+    # ------------------------------------------------------------------
+
+    def _draw_i2i(
+        self,
+        prompt: str,
+        context_images: list,
+        guidance_scale: float,
+        num_steps: int,
+        time_shifting_factor: float,
+    ) -> "Image.Image":
+        """Image-conditioned generation, aligned with official inference_mixed_modality.py.
+
+        Mechanism:
+        1. VAE-encode context images → clean latents (image_latents_history)
+        2. Text sequence: [bos] + prompt + [boi][img_pad]*N[eoi] per context
+           image + [boi][img_pad]*N[eoi] for the new image; each image latent
+           group is bound to its span via modality_positions
+        3. Denoising tensor z = cat([*context_latents, noise]) — the context
+           latents participate through their understanding-path embeddings
+           (image_embedder_und + image_embedder_gen + fusion) but are kept
+           fixed because only_denoise_last_image=True zeroes their v-prediction
+        4. CFG: uncond branch has empty text; all image positions collapse to
+           offset 2 (official convention), so only the noise slot is visible
+        5. ODE sampling via t2i_generate + VAE decode of the last latent
+        """
+        import torch
+        import torchvision.transforms as T
+        from PIL import Image
+        from ...vendor.showo2.transport import create_transport
+        from ...vendor.showo2.transport.transport import Sampler
+        from ...vendor.showo2.models import omni_attn_mask_naive
+
+        device = self._device
+        model = self._model
+        tokenizer = self._tokenizer
+        tids = self._showo_token_ids
+        inner = model.showo2
+        model_dtype = next(inner.parameters()).dtype
+
+        config = inner.config
+        image_latent_dim = getattr(config, "image_latent_dim", 16)
+        latent_height = getattr(config, "image_latent_height", 27)
+        latent_width = getattr(config, "image_latent_width", 27)
+        patch_size = getattr(config, "patch_size", 2)
+        add_time_embeds = getattr(config, "add_time_embeds", False)
+
+        # Token count per image span (official num_mixed_modal_tokens)
+        num_image_tokens = latent_height * latent_width  # 729
+        if add_time_embeds:
+            num_image_tokens += 1  # 730
+        latent_h = latent_height * patch_size  # 54
+        latent_w = latent_width * patch_size
+
+        # 1. VAE-encode context images → clean latents (deterministic: mu)
+        preprocess = T.Compose([
+            T.Resize(432, interpolation=T.InterpolationMode.BICUBIC),
+            T.CenterCrop(432),
+            T.ToTensor(),
+            T.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5]),
+        ])
+        cond_latents = []
+        for img in context_images[:3]:  # cap context images to bound seq length
+            if img.mode != "RGB":
+                img = img.convert("RGB")
+            img_t = preprocess(img).to(device, dtype=model_dtype)
+            lat = self._vae.sample(
+                img_t.unsqueeze(0).unsqueeze(2)
+            ).squeeze(2).to(model_dtype)  # (1, C, 54, 54)
+            cond_latents.append(lat)
+        num_cond = len(cond_latents)
+        num_imgs = num_cond + 1  # context images + the new image
+
+        # 2. Token sequences
+        prompt_ids = tokenizer(prompt, add_special_tokens=False)["input_ids"][:2048]
+        text_cond = [tids["bos_id"]] + list(prompt_ids)
+        positions_cond = []
+        for _ in range(num_imgs):
+            offset = len(text_cond) + 1  # 1 (bos) + len(text) + 1 (boi)
+            text_cond += (
+                [tids["boi_id"]]
+                + [tids["img_pad_id"]] * num_image_tokens
+                + [tids["eoi_id"]]
+            )
+            positions_cond.append([offset, num_image_tokens])
+
+        # Uncond branch: empty text, single image span (official convention —
+        # all image positions collapse to offset 2; the noise slot wins)
+        text_null = (
+            [tids["bos_id"]]
+            + [tids["boi_id"]]
+            + [tids["img_pad_id"]] * num_image_tokens
+            + [tids["eoi_id"]]
+        )
+        positions_null = [[2, num_image_tokens]] * num_imgs
+
+        # Pad both to a common length (multiple of 128, official convention)
+        pad_id = tokenizer.pad_token_id
+        max_len = max(len(text_cond), len(text_null))
+        if max_len % 128 != 0:
+            max_len = (max_len // 128 + 1) * 128
+        text_cond += [pad_id] * (max_len - len(text_cond))
+        text_null += [pad_id] * (max_len - len(text_null))
+
+        with torch.no_grad():
+            # 3. Noise + context latents
+            z_new = torch.randn(
+                (1, image_latent_dim, latent_h, latent_w),
+                dtype=model_dtype, device=device,
+            )
+            z_cond = torch.cat([*cond_latents, z_new], dim=0)  # (num_imgs, C, H, W)
+
+            if guidance_scale > 0:
+                # Official: uncond shares the same structure, filled with the
+                # new noise only (context embeds get overwritten at offset 2)
+                z_null = z_new.clone().repeat(num_imgs, 1, 1, 1)
+                z = torch.cat([z_cond, z_null], dim=0)  # (2*num_imgs, C, H, W)
+                text_tokens = torch.tensor([text_cond, text_null], device=device)
+                modality_positions = torch.tensor(
+                    [positions_cond, positions_null], device=device
+                )  # (2, num_imgs, 2)
+            else:
+                z = z_cond
+                text_tokens = torch.tensor([text_cond], device=device)
+                modality_positions = torch.tensor([positions_cond], device=device)
+
+            # 4. Attention mask (causal + bidirectional image spans)
+            block_mask = omni_attn_mask_naive(
+                B=text_tokens.size(0),
+                LEN=max_len,
+                modalities=modality_positions,
+                device=device,
+            ).to(model_dtype)
+
+            # 5. Transport + ODE sampling
+            transport = create_transport(
+                path_type="Linear",
+                prediction="velocity",
+                snr_type="lognorm",
+                do_shift=True,
+                seq_len=num_image_tokens,
+            )
+            sampler = Sampler(transport)
+
+            model_kwargs = dict(
+                text_tokens=text_tokens,
+                attention_mask=block_mask,
+                modality_positions=modality_positions,
+                output_hidden_states=True,
+                max_seq_len=max_len,
+                guidance_scale=guidance_scale,
+                only_denoise_last_image=True,
+            )
+
+            def _model_fn(x, t, **kwargs):
+                return model.t2i_generate(image_latents=x, t=t, **kwargs)
+
+            sample_fn = sampler.sample_ode(
+                sampling_method="euler",
+                num_steps=num_steps,
+                atol=1e-6,
+                rtol=1e-3,
+                do_shift=True,
+                time_shifting_factor=time_shifting_factor,
+            )
+            samples = sample_fn(z, _model_fn, **model_kwargs)[-1]
+
+            # 6. Take conditional half, then the last latent (the new image)
+            if guidance_scale > 0:
+                samples = torch.chunk(samples, 2)[0]
+            new_latent = samples[-1:].to(model_dtype)  # (1, C, H, W)
+
+            # 7. VAE decode
+            images = self._vae.batch_decode(new_latent.unsqueeze(2)).squeeze(2)
             images = torch.clamp((images + 1.0) / 2.0, 0.0, 1.0)
             arr = (images[0] * 255.0).to(torch.uint8).permute(1, 2, 0).cpu().numpy()
             return Image.fromarray(arr)

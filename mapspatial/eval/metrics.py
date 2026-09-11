@@ -1,6 +1,6 @@
 """Metrics aggregation — per (strategy, view, task, variant) cells + summary.
 
-Fixes gate2building's summary.json issues:
+Fixes the predecessor pipeline's summary.json issues:
   - 'written' only reflected current run, not cumulative → use 'total' from input
   - No 'accuracy' field (had to compute manually)
   - No strategy dimension (needed for 3-way ablation)

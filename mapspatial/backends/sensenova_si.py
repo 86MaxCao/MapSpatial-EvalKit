@@ -1,6 +1,6 @@
 """SenseNova-SI backend.
 
-Ported from gate2building backends.py:1121-1248.
+Ported from an internal predecessor evaluation codebase.
 Handles both regular SenseNova-SI models and SenseNova-SI-BAGEL variant.
 
 Key: auto-inserts <image> placeholders to match image count.

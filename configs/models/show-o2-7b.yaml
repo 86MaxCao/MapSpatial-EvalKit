@@ -13,7 +13,7 @@ generate:
 
 backend_args:
   guidance_scale: 5.0
-  num_steps: 50
+  num_steps: 20
   time_shifting_factor: 3.0
 
 strategies: [direct, external_draw]

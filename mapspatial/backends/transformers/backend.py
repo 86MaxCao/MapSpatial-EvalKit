@@ -1,6 +1,6 @@
 """Transformers backend — shared base for HuggingFace transformers models.
 
-Splits gate2building's 539-line monolithic TransformersBackend (9 branches)
+Splits the predecessor's 539-line monolithic TransformersBackend (9 branches)
 into per-model-family submodules. Model class selection is explicit in config,
 not guessed from model_id prefix.
 """

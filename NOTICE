@@ -1,0 +1,41 @@
+# Third-Party Notices
+
+MapSpatial-EvalKit vendors or adapts code from the following open-source
+projects (under `mapspatial/vendor/`). Each vendored subdirectory contains an
+`ORIGIN.md` with details. We are grateful to the authors of these projects.
+
+## Vendored or adapted code
+
+| Package (vendor dir)                 | Upstream project                                                    | License     |
+|--------------------------------------|---------------------------------------------------------------------|-------------|
+| `bagel/`                              | [ByteDance-Seed/Bagel](https://github.com/ByteDance-Seed/Bagel) — original implementation, architecture follows upstream | Apache-2.0  |
+| `bagel_interleave/`                   | [hychaochao/VLMEvalKit_Thinkmorph](https://github.com/hychaochao/VLMEvalKit_Thinkmorph) | Apache-2.0 |
+| `blip3o/`                             | [JiuhaiChen/BLIP3o](https://github.com/JiuhaiChen/BLIP3o) — original implementation, architecture follows upstream | see upstream |
+| `cambrian/`                           | [cambrian-mllm/cambrian](https://github.com/cambrian-mllm/cambrian) | Apache-2.0  |
+| `janus/`                              | [deepseek-ai/Janus](https://github.com/deepseek-ai/Janus) — derived, DeepSeek copyright headers preserved | MIT         |
+| `joyai_image/`                        | [jd-opensource/JoyAI-Image](https://github.com/jd-opensource/JoyAI-Image) — original implementation, architecture follows upstream | Apache-2.0 |
+| `latentum/`                           | [SJTU-DENG-Lab/LatentUM](https://github.com/SJTU-DENG-Lab/LatentUM) | Apache-2.0  |
+| `neo_chat/`                           | [OpenSenseNova/SenseNova-U1](https://github.com/OpenSenseNova/SenseNova-U1) — original implementation, architecture follows upstream | Apache-2.0 |
+| `sensenova_si_pkg/`                   | [OpenSenseNova/SenseNova-SI](https://github.com/OpenSenseNova/SenseNova-SI) | Apache-2.0 |
+| `showo2/`                             | [showlab/Show-o](https://github.com/showlab/Show-o) (Show-o2) — original implementation, architecture follows upstream | Apache-2.0 |
+| `spatial_mllm/`                       | [THU-SI/Spatial-MLLM](https://github.com/THU-SI/Spatial-MLLM)       | MIT         |
+| `vilasr_model.py`, `vilasr_utils/`    | [AntResearchNLP/ViLaSR](https://github.com/AntResearchNLP/ViLaSR)   | MIT         |
+
+The unified-model integrations (`bagel/`, `blip3o/`, `joyai_image/`,
+`neo_chat/`, `showo2/`) were implemented by the authors in the integration
+style of ByteDance's [VeOmni](https://github.com/ByteDance-Seed/VeOmni)
+framework (Apache-2.0); no VeOmni code is copied. Their architectures follow
+the official upstream model repositories listed above.
+
+## Transitive components (copyright headers preserved in-file)
+
+Vendored files additionally contain code from, or derived from:
+HuggingFace Transformers (Apache-2.0), Qwen (Apache-2.0), OpenGVLab InternVL
+(MIT), Meta Platforms VGGT / SAM (Apache-2.0), Black Forest Labs, and
+Stability AI (Stable Diffusion 3.5 MMDiT-X, used by the LatentUM decoder).
+
+## Evaluated models (no code copied)
+
+The toolkit also evaluates checkpoints/APIs of: Qwen2/2.5/3-VL, InternVL3/3.5,
+GLM-4.6V, Step3-VL, MiMo-Embodied, ThinkMorph, and the Gemini / Qwen-Plus APIs.
+These are acknowledged in the README; no code from these projects is vendored.

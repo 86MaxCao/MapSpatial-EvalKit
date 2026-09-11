@@ -1,6 +1,6 @@
 """Preflight: image existence + readability check.
 
-Borrowed from gate2building run_vlm_jsonl_inference_v5.py:97-127 (correct implementation).
+Borrowed from the predecessor internal pipeline (the correct implementation).
 Improvements: structured output, --allow-missing threshold, mtime cache.
 """
 

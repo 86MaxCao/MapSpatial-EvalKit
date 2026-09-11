@@ -1,6 +1,6 @@
 """Runner — execution scheduling, resume, striped multi-GPU, atomic write.
 
-Key improvements over gate2building:
+Key improvements over the predecessor pipeline:
   - JSONL + atomic append + id dedup (no duplicate lines on re-run)
   - Striped multi-GPU (torchrun range(rank, N, world_size))
   - unset WORLD_SIZE before model construction
@@ -34,7 +34,7 @@ from .compat import applied as compat_applied
 def load_completed(path: Path) -> tuple[set[str], int]:
     """Return (completed id set, corrupt line count).
 
-    Corrupt lines are reported, NOT silently swallowed (fixes gate2building bug).
+    Corrupt lines are reported, NOT silently swallowed (fixes a predecessor bug).
     """
     done: set[str] = set()
     corrupt = 0

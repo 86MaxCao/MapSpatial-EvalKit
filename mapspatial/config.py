@@ -1,6 +1,6 @@
 """Nested configuration with YAML loading and ${ENV_VAR} expansion.
 
-Fixes gate2building's per-backend config pollution (bagel_mode, vilasr_max_steps,
+Fixes the predecessor pipeline's per-backend config pollution (bagel_mode, vilasr_max_steps,
 spatial_mllm_model_type all in flat RunConfig) by nesting backend-specific args.
 """
 

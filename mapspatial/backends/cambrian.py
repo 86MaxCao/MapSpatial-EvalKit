@@ -1,6 +1,6 @@
 """Cambrian-S backend.
 
-Ported from gate2building backends.py:1344-1456.
+Ported from an internal predecessor evaluation codebase.
 Also references VLMEvalKit vlm/cambrian_s.py (cleaner version).
 
 Uses vendored cambrian package (vendor/cambrian/cambrian_pkg/).

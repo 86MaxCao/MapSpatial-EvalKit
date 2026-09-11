@@ -1,6 +1,6 @@
-"""Answer extraction — rewritten from gate2building.
+"""Answer extraction — rewritten from the predecessor internal pipeline.
 
-Fixes two bugs in gate2building's answer_extraction.py:
+Fixes two bugs in the predecessor's answer extraction:
   1. allow_multi parameter was declared but never used in the function body
   2. Hardcoded A-D only — should use multiple_choice.choices for valid letters
 
@@ -21,7 +21,7 @@ class ExtractResult:
     confident: bool       # True = explicit pattern, False = fallback "last letter"
 
 
-# Patterns in priority order (borrowed from gate2building, improved)
+# Patterns in priority order (borrowed from the predecessor pipeline, improved)
 _ANSWER_TAG_RE = re.compile(r"<answer>\s*([A-Z](?:\s*,\s*[A-Z])*)\s*</answer>", re.IGNORECASE)
 
 _EXPLICIT_RE = re.compile(

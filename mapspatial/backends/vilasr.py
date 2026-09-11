@@ -1,6 +1,6 @@
 """ViLaSR backend.
 
-Ported from gate2building backends.py:1253-1340.
+Ported from an internal predecessor evaluation codebase.
 ViLaSR uses vLLM internally for both image and video inference.
 For images, it delegates to VilasrModel.run().
 

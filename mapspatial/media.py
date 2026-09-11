@@ -1,6 +1,6 @@
 """Unified media handling — single entry for image loading, URL download, video frames.
 
-Consolidates 3 categories of duplication from gate2building:
+Consolidates 3 categories of duplication from the predecessor pipeline:
   - URL download (5 places, 3 strategies; SenseNovaU1Backend had none → crash)
   - Video frame extraction (4 places; frame limits inconsistent: U1=8, others=16)
   - Temp file lifecycle (scattered tempfile + manual cleanup lists)
@@ -176,7 +176,7 @@ def _url_hash(url: str) -> str:
 class MediaCache:
     """Context manager for temporary media files.
 
-    Cleanup on exit prevents temp file leakage that plagued gate2building.
+    Cleanup on exit prevents temp file leakage that plagued the predecessor pipeline.
     """
 
     def __init__(self, cache_dir: Path | None = None):

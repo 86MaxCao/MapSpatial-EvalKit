@@ -1,6 +1,6 @@
 """Unified message construction — placeholder normalization + chat format conversion.
 
-Consolidates 8 places in gate2building where <image>/<video> placeholder handling
+Consolidates 8 places in the predecessor pipeline where <image>/<video> placeholder handling
 was written per-backend with 5 different behaviors.
 
 Data layer produces Messages WITHOUT placeholders. When a backend needs

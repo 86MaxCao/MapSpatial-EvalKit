@@ -1,12 +1,12 @@
 """API backend — HTTP-based inference for cloud models (Qwen Plus, Gemini, etc.).
 
-Fixes gate2building issues:
+Fixes issues from the predecessor internal pipeline:
   - Hardcoded API keys → environment variables (MAPSPATIAL_API_KEYS)
   - Key rotation self._idx race condition → threading.Lock
   - Concurrency granularity: (view,variant) → sample-level (runner handles this)
   - All keys treated as leaked → user should rotate
 
-Preserves gate2building strengths:
+Preserves the predecessor pipeline's strengths:
   - Multi-key rotation on rate-limit
   - Per-model image compression (gemini=512/75, qwen/gpt=768/80, default=1024/85)
   - Exponential backoff + jitter
@@ -42,6 +42,10 @@ class APIBackend(Backend):
         self._cfg = cfg
         self._model_name = cfg.name
         self._base_url = cfg.backend_args.get("api_url", "")
+        # Unset env vars leave the literal "${VAR}" unexpanded; treat as empty
+        # so the default endpoint below applies.
+        if self._base_url.startswith("${"):
+            self._base_url = ""
 
         # Read API keys from env or config
         env_keys = os.environ.get("MAPSPATIAL_API_KEYS", "")

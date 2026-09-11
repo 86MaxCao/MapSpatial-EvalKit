@@ -6,7 +6,7 @@ Key principles (from docs/03-backends.md):
 3. Single-item prep failure doesn't block the batch (index_map).
 4. limit_mm_per_prompt from config — t4 needs 4 images.
 
-Borrowed from gate2building backends.py:418-521 (the correct implementation).
+Borrowed from the predecessor internal pipeline (the correct implementation).
 """
 
 from __future__ import annotations

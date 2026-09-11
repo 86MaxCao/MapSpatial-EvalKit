@@ -38,7 +38,8 @@ except ImportError:
     SamplingParams = None
 
 
-# ---------- Copied from vilasr_infer (constants and prompts) ----------
+# ---------- Constants and prompts copied from the official ViLaSR repo ----------
+# (github.com/AntResearchNLP/ViLaSR, eval/infer.py — see vilasr_utils/ORIGIN.md)
 MAX_IMAGES = 45
 
 SYSTEM_PROMPT = """### Guidance:
