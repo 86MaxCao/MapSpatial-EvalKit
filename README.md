@@ -65,12 +65,11 @@ export MAPSPATIAL_API_KEYS=... # API key(s), comma-separated for rotation
 ## Dataset
 
 First, download the MapSpatial benchmark data from HuggingFace:
+[mapspatial/map-spatial-benchmark](https://huggingface.co/datasets/mapspatial/map-spatial-benchmark)
 
 ```bash
 huggingface-cli download mapspatial/map-spatial-benchmark --repo-type dataset --local-dir /path/to/map-spatial-benchmark
 ```
-
-Or browse the dataset page: https://huggingface.co/datasets/mapspatial/map-spatial-benchmark
 
 The benchmark pack follows the HuggingFace layout (`data/*.jsonl` + `images/`);
 pass `--layout hf --input-dir /path/to/map-spatial-benchmark` to the CLI
