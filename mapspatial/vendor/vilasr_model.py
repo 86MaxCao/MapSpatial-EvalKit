@@ -3,7 +3,7 @@ ViLaSR model wrapper for multi-turn spatial reasoning with Object Mapper / Path 
 
 Used by the vilasr backend in inference. Supports multi-image input and answer
 extraction from the model's <answer>...</answer> or last assistant turn.
-All logic is self-contained; does not import from inference/vilasr_infer.
+All logic is self-contained.
 """
 
 from __future__ import annotations

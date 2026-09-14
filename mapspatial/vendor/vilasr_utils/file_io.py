@@ -1,6 +1,5 @@
 """Minimal file I/O utilities for image downloading.
 
-Adapted from outdoor-spatial-intelligence-scripts/utils/file_io.py.
 Only includes download_image_from_url (needed by backends for URL images).
 """
 
