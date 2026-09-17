@@ -1,28 +1,13 @@
 # MapSpatial-EvalKit
 
+[![MapSpatial Benchmark](https://img.shields.io/badge/%F0%9F%A4%97_MapSpatial-Benchmark-FFD21F?style=flat-square&logoColor=black)](https://huggingface.co/datasets/mapspatial/map-spatial-benchmark)
+
 MapSpatial-EvalKit is a multimodal reasoning and evaluation toolkit for **outdoor map spatial understanding**. It runs and compares vision-language models and unified (generate + understand) models under a unified data format, inference interface, and evaluation protocol.
 
-- **Understanding models**: Qwen2-VL, Qwen2.5-VL, Qwen3-VL, InternVL3, InternVL3.5, GLM-4.6V, Step3-VL, MiMo-Embodied, Cambrian-S, ViLaSR, Spatial-MLLM, SenseNova-SI, plus API models (Gemini 3 Flash, Qwen3.5 Plus, Qwen3.6 Plus).
-- **Unified models** (generate + understand): Bagel, ThinkMorph, SenseNova-U1, LatentUM, JoyAI-Image, Show-o2.
+- **Understanding models**: Qwen2-VL-7B, Qwen2.5-VL-7B, Qwen3-VL-8B, InternVL3-8B, InternVL3.5-8B, GLM-4.6V-Flash, Step3-VL-10B, MiMo-Embodied-7B, Cambrian-S-7B, ViLaSR, Spatial-MLLM, SenseNova-SI-1.3, SenseNova-SI-1.5.
+- **Unified models** (generate + understand): Bagel-7B, ThinkMorph-7B, SenseNova-U1-8B, LatentUM, JoyAI-Image, Show-o2.
 
 Unified models can **generate intermediate images** during reasoning (visual chain-of-thought). This is the core hypothesis the toolkit is built to verify: *does letting a model draw intermediate sketches actually improve spatial understanding accuracy?*
-
-## Architecture in one sentence
-
-```
-data (JSONL)  →  Message[]  →  Strategy  →  Backend  →  Prediction  →  evaluation
-                  interleaved               orchestrates   provides        structured,
-                  text/image list           capabilities   understand/     with generated
-                                                           draw/batch      images + trace
-```
-
-**Backends provide capabilities; strategies decide how to orchestrate them.** The two dimensions are orthogonal, so `Qwen3-VL + direct` and `Bagel + native-interleave` produce results with an identical schema, making accuracy directly comparable.
-
-Key constraints:
-
-1. **`Prediction` is not a string.** It carries `generated_images` and `trace` so the visual chain-of-thought remains auditable.
-2. **Strategies**: `direct` (no intermediate images), `native-interleave` (model decides when to draw), `external-draw` / `forced-interleave` (strategy forces drawing, for ablation).
-3. **vLLM batches for real.** The vLLM backend submits the whole batch at once and never clears the CUDA cache inside the inference loop.
 
 ## Installation
 
